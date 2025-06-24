@@ -1,5 +1,6 @@
 # Ignore data, models, outputs
 data/
+scratch/
 checkpoints/
 *.ckpt
 *.pt
