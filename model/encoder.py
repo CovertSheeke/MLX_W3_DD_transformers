@@ -5,6 +5,44 @@ import torch.nn as nn
 import numpy as np
 from patch_and_embed import image_to_patch_columns
 
+# Function to get 2D sinusoidal positional encodings
+def get_2d_sincos_pos_enc(grid_h: int, grid_w: int, d_model: int) -> torch.Tensor:
+    """
+    Return a [grid_h*grid_w, d_model] tensor of fixed 2D sinusoidal positional encodings.
+    Splits into row/column parts; handles odd d_model by uneven split.
+    So the first hald of the embedding gets the row position encoding added to the tensor, the 
+    second half gets the column position encoding added.
+    """
+    # split sizes
+    half1 = d_model // 2
+    half2 = d_model - half1
+    # prepare row and column indices
+    position_row = torch.arange(grid_h).unsqueeze(1).float()  # shape [H,1]
+    position_col = torch.arange(grid_w).unsqueeze(1).float()  # shape [W,1]
+    # compute div terms
+    # for row part: size half1
+    div_term_row = torch.exp(torch.arange(0, half1, 2).float() * (-np.log(10000.0) / half1))
+    # for col part: size half2
+    div_term_col = torch.exp(torch.arange(0, half2, 2).float() * (-np.log(10000.0) / half2))
+    # allocate
+    row_positional_enc = torch.zeros(grid_h, half1)
+    col_positional_enc = torch.zeros(grid_w, half2)
+    # fill row position encoding using sine and cosine
+    row_positional_enc[:, 0::2] = torch.sin(position_row * div_term_row)
+    row_positional_enc[:, 1::2] = torch.cos(position_row * div_term_row)
+    # fill col position encoding
+    col_positional_enc[:, 0::2] = torch.sin(position_col * div_term_col)
+    col_positional_enc[:, 1::2] = torch.cos(position_col * div_term_col)
+    # combine into [H, W, d_model]
+    positional_enc = torch.zeros(grid_h, grid_w, d_model)
+    for i in range(grid_h):
+        for j in range(grid_w):
+            positional_enc[i, j, :half1] = row_positional_enc[i]
+            positional_enc[i, j, half1:] = col_positional_enc[j]
+    # flatten to [H*W, d_model]
+    return positional_enc.view(grid_h * grid_w, d_model)
+
+
 class MLP(nn.Module):
     def __init__(self, input_dim=49, hidden_dim=25, output_dim=10):
         super(MLP, self).__init__()
@@ -17,14 +55,36 @@ class MLP(nn.Module):
         return x
 
 class TransformerEncoder(torch.nn.Module):
-    def __init__(self, dim_in=49, dim_proj=49, dim_out=49, num_heads=8, num_encoders=6):
+    def __init__(self, 
+                 dim_in=49, 
+                 dim_embed=49, #after projecting the input to the embedding dimension
+                 dim_proj=49, 
+                 dim_out=49, 
+                 num_heads=8, 
+                 num_encoders=6):
+        
         super().__init__()
 
+        # 1) Patch projection: map raw 49-D pixels → dim_embed (currently also 49)
+        self.patch_proj = nn.Linear(dim_in, dim_embed)
+
+        # 2) Fixed 2D sinusoidal positional encoding for a 4×4 grid
+        #  Compute once, register as buffer so it’s moved with model but not learned.
+        # TODO: un hard code these.
+        pe = get_2d_sincos_pos_enc(grid_h=4, grid_w=4, d_model=dim_embed)  # [16, dim_embed]
+        self.register_buffer("pos_encoding", pe.unsqueeze(0))  # shape [1,16,dim_embed]
+
+        # 3) Stack of encoding blocks, now expecting dim_embed in/out
         self.encoding_blocks = torch.nn.ModuleList([
-            EncodingBlock(dim_in=49, dim_proj=49, dim_out=49, num_heads=8) for _ in range(num_encoders)
+            EncodingBlock(dim_in=dim_embed,
+                          dim_proj=dim_embed,
+                          dim_out=dim_out,
+                          num_heads=num_heads)
+            for _ in range(num_encoders)
         ])
 
-        self.mlp = MLP(input_dim=49, hidden_dim=25, output_dim=10)  # Example MLP for classification
+        # 4) Final MLP for classification: average pooled embedding → logits
+        self.mlp = MLP(input_dim=dim_out, hidden_dim=25, output_dim=10)
         # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output #TODO: add the cls token in
       
     def forward(self, embedding, target_labels):
