@@ -1,0 +1,29 @@
+# Ignore data, models, outputs
+data/
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+
+# Ignore Python cache and logs
+__pycache__/
+*.py[cod]
+*.log
+
+# Ignore Jupyter/IPython stuff
+.ipynb_checkpoints/
+
+# Ignore envs and lockfiles
+.venv/
+env/
+*.env
+
+# Ignore OS junk
+.DS_Store
+
+# VS Code and PyCharm config
+.vscode/
+.idea/
+
+# WandB logs
+wandb/
