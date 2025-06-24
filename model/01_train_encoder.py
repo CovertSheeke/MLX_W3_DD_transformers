@@ -39,9 +39,15 @@ wandb.init(
 
 # Prepare the dataset and dataloader
 print("Preparing dataset and dataloader...")
-ds = trainset.data.float().to(dev)
+# Scale dataset to be from [0,1], move to device
+ds = trainset.data.float().div(255.0).to(dev)
+# Standardise to zero mean/unit variance (MNIST stats)
+MNIST_MEAN = 0.1307
+MNIST_STD = 0.3081
+ds = ds.sub_(MNIST_MEAN).div_(MNIST_STD)
+# Move targets to device as well
 data_targets = trainset.targets.to(dev)
-###how are the targets shaped? do we need to onehot encode?
+###TODO: how are the targets shaped? do we need to onehot encode?
 dl = torch.utils.data.DataLoader(
     torch.utils.data.TensorDataset(ds, data_targets),
     batch_size=wandb.config.batch_size,

@@ -25,7 +25,7 @@ class TransformerEncoder(torch.nn.Module):
         ])
 
         self.mlp = MLP(input_dim=49, hidden_dim=25, output_dim=10)  # Example MLP for classification
-        # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output
+        # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output #TODO: add the cls token in
       
     def forward(self, embedding, target_labels):
         embedding_n = embedding
