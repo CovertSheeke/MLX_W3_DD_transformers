@@ -31,6 +31,7 @@ class TransformerEncoder(torch.nn.Module):
         embedding_n = embedding
         for encoding_block in self.encoding_blocks:
             embedding_n = encoding_block(embedding_n)
+            ### TODO: add MLP to the output of each block?
 
         # print(f"Final embedding_n shape before loss: {embedding_n.shape}")
         # print(f"Target labels shape: {target_labels.shape}")
@@ -38,6 +39,7 @@ class TransformerEncoder(torch.nn.Module):
         pooled = embedding_n.mean(dim=1)
         # loss_fn = nn.CrossEntropyLoss()
         predictions = self.mlp(pooled)  # Assuming self.mlp is defined in the class
+        ### TODO: apply normalisation to prediction (softmax?)
 
         # predictions = self.cls_head(embedding_n)  # Classifier head for final output
         # print(f"Predictions shape: {predictions.shape}")
@@ -64,9 +66,6 @@ class EncodingBlock(torch.nn.Module):
         # print(f"Shape of out_proj weight: {self.W_out_proj.weight.shape}")
         # assert self.out_proj.weight.shape == (16, 49),  f"Expected out_proj weight shape (16, 49), got {self.out_proj.weight.shape}"
 
-    def another_method(self):
-        print("This is another method in the EncodingBlock class.")
-
     def forward(self, embedding):
         # image_columns = image_to_patch_columns  # Assuming image is already embedded
         head_outputs = [head(embedding) for head in self.heads]
@@ -83,7 +82,8 @@ class EncodingBlock(torch.nn.Module):
         # return concat @ out_proj  # Project the concatenated output to the desired output dimension
     
 class SelfAttentionHead(torch.nn.Module):
-    def __init__(self, dim_in, dim_proj, dim_out):
+    def __init__(self, dim_in, dim_proj, dim_out): ### TODO: seperate dim_v, dim_qk
+        ### TODO: include batch size in assertions
         super().__init__()
         self.dim_in = dim_in
         self.dim_proj = dim_proj
@@ -124,10 +124,11 @@ class SelfAttentionHead(torch.nn.Module):
         # debug shape
         # print(f"A shape: {A.shape}")
         # assert A.shape == (16, 16), f"Expected A shape (16, 16), got {A.shape}"
-
+        ### TODO: maybe remove the epsilon
         eps = 1e-6  # Small epsilon to avoid division by zero
         scale = np.sqrt(K.size(-1)) + eps
         attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / scale
+        ### TODO: check if this is correct, we were trying to avoid nannvalues, maybe this isn't the best place to do this
         attention_scores = torch.clamp(attention_scores, min=-30.0, max=30.0)  # Prevent softmax overflow
         attention_weights = F.softmax(attention_scores, dim=-1)
 

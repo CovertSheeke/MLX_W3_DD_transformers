@@ -42,6 +42,7 @@ wandb.init(
 print("Preparing dataset and dataloader...")
 ds = trainset.data.float().to(dev)
 data_targets = trainset.targets.to(dev)
+###how are the targets shaped? do we need to onehot encode?
 dl = torch.utils.data.DataLoader(
     torch.utils.data.TensorDataset(ds, data_targets),
     batch_size=wandb.config.batch_size,
