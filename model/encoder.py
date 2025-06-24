@@ -70,9 +70,9 @@ class TransformerEncoder(torch.nn.Module):
 
         # 2) Fixed 2D sinusoidal positional encoding for a 4×4 grid
         #  Compute once, register as buffer so it’s moved with model but not learned.
-        # TODO: un hard code these.
-        pe = get_2d_sincos_pos_enc(grid_h=4, grid_w=4, d_model=dim_embed)  # [16, dim_embed]
-        self.register_buffer("pos_encoding", pe.unsqueeze(0))  # shape [1,16,dim_embed]
+        # TODO: un-hard code the grid dims
+        pos_enc = get_2d_sincos_pos_enc(grid_h=4, grid_w=4, d_model=dim_embed)  # [16, dim_embed]
+        self.register_buffer("pos_encoding", pos_enc.unsqueeze(0))  # shape [1,16,dim_embed]
 
         # 3) Stack of encoding blocks, now expecting dim_embed in/out
         self.encoding_blocks = torch.nn.ModuleList([
@@ -88,7 +88,20 @@ class TransformerEncoder(torch.nn.Module):
         # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output #TODO: add the cls token in
       
     def forward(self, embedding, target_labels):
-        embedding_n = embedding
+        """
+        Args:
+        embedding: [batch, num_patches, dim_in] raw patch pixels.
+        target_labels: [batch] tensor of class indices (0-9).
+        Returns:
+        Cross-entropy loss.
+        """
+        # Project raw pixels to a higher-dimensional embedding space
+        # (although for now we still use 49) #TODO: select a better dim (e.g 64)
+        embedding_n = self.patch_proj(embedding)
+
+        # Add positional encoding to the embedding
+        embedding_n = embedding_n + self.pos_encoding 
+
         for encoding_block in self.encoding_blocks:
             embedding_n = encoding_block(embedding_n)
             ### TODO: add MLP to the output of each block?
@@ -98,21 +111,21 @@ class TransformerEncoder(torch.nn.Module):
 
         pooled = embedding_n.mean(dim=1)
         # loss_fn = nn.CrossEntropyLoss()
-        predictions = self.mlp(pooled)  # Assuming self.mlp is defined in the class
-        ### TODO: apply normalisation to prediction (softmax?)
+        logits = self.mlp(pooled)  # Assuming self.mlp is defined in the class
+        ### TODO: should we apply normalisation to prediction (softmax?)
 
-        # predictions = self.cls_head(embedding_n)  # Classifier head for final output
-        # print(f"Predictions shape: {predictions.shape}")
+        # logits = self.cls_head(embedding_n)  # Classifier head for final output
+        # print(f"logits shape: {logits.shape}")
         # Average pool over the 16 (num_patches) dimension to get shape (batch_size, dim_out)
-        # print(f"Pooled predictions shape: {pooled.shape}")
+        # print(f"Pooled logits shape: {pooled.shape}")
 
         # Compute cross-entropy loss
-        return F.cross_entropy(predictions, target_labels)
+        return F.cross_entropy(logits, target_labels)
         
 
 
         # target_labels should be class indices (LongTensor), not one-hot encoded
-        # return F.cross_entropy(predictions, target_labels)
+        # return F.cross_entropy(logits, target_labels)
 
 class EncodingBlock(torch.nn.Module):
     def __init__(self, dim_in=49, dim_proj=49, dim_out=49, num_heads=8):
