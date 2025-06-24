@@ -21,9 +21,6 @@ with open(os.path.abspath(data_path), 'rb') as f:
 dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", dev)
 
-## Initialize the encoder
-enc = encoder.TransformerEncoder().to(dev)
-
 ## initialize WandB for logging
 wandb.init(
     project="mlx_wk3_mnist_transformer",
@@ -32,10 +29,24 @@ wandb.init(
         "learning_rate": 0.001,
         "batch_size": 64,
         "num_epochs": 2,
+        "num_heads": 8,
+        "num_encoders": 8,
+        "num_patches": 16,  # Assuming a fixed number of patches, e.g., 16 for MNIST
         "patch_size": 7,
-        "stride": 7
+        "stride": 7,
+        "dim_in": 49,  # Assuming each patch is flattened to a vector of size 49 (7x7)
+        "dim_proj_V": 49,  # Projection dimension for value matrix, can be same as dim_in
+        "dim_proj_QK": 49,  # Projection dimension for key&query matrices, can be same as dim_in
+        "dim_out": 49,  # Output dimension, must be same as dim_in
+        "mlp_hidden_dim": 25,  # Hidden dimension for MLP
+        "mlp_output_dim": 10,  # Output dimension for MLP (number of classes)
+        "mlp_between_blocks_hidden_dim": 49,  # Hidden dimension for MLP between blocks
+        "mlp_between_blocks_output_dim": 49,  # Output
     }
 )
+
+## Initialize the encoder
+enc = encoder.TransformerEncoder(wandb.config).to(dev)
 
 # Prepare the dataset and dataloader
 print("Preparing dataset and dataloader...")
@@ -73,6 +84,11 @@ for epoch in range(wandb.config.num_epochs):
         if idx % 100 == 0:
             prgs.set_postfix({"loss": loss.item()})
             print(f"Epoch {epoch + 1}, Batch {idx + 1}, Loss: {loss.item()}")
+
+# Save the model   
+model_path = os.path.join(os.path.dirname(__file__), '..', 'models', f'mnist_transformer_{ts}.pt')
+torch.save(enc.state_dict(), model_path)
+print(f"Model saved to {model_path}")
         
 
 wandb.finish()

@@ -13,38 +13,46 @@ def get_2d_sincos_pos_enc(grid_h: int, grid_w: int, d_model: int) -> torch.Tenso
     So the first hald of the embedding gets the row position encoding added to the tensor, the 
     second half gets the column position encoding added.
     """
-    # split sizes
+    # how many dims for row vs col
     half1 = d_model // 2
     half2 = d_model - half1
-    # prepare row and column indices
-    position_row = torch.arange(grid_h).unsqueeze(1).float()  # shape [H,1]
-    position_col = torch.arange(grid_w).unsqueeze(1).float()  # shape [W,1]
-    # compute div terms
-    # for row part: size half1
-    div_term_row = torch.exp(torch.arange(0, half1, 2).float() * (-np.log(10000.0) / half1))
-    # for col part: size half2
-    div_term_col = torch.exp(torch.arange(0, half2, 2).float() * (-np.log(10000.0) / half2))
-    # allocate
-    row_positional_enc = torch.zeros(grid_h, half1)
-    col_positional_enc = torch.zeros(grid_w, half2)
-    # fill row position encoding using sine and cosine
-    row_positional_enc[:, 0::2] = torch.sin(position_row * div_term_row)
-    row_positional_enc[:, 1::2] = torch.cos(position_row * div_term_row)
-    # fill col position encoding
-    col_positional_enc[:, 0::2] = torch.sin(position_col * div_term_col)
-    col_positional_enc[:, 1::2] = torch.cos(position_col * div_term_col)
+    # how many even/odd slots in each half
+    even1 = (half1 + 1) // 2
+    odd1  = half1 // 2
+    even2 = (half2 + 1) // 2
+    odd2  = half2 // 2
+
+    # row and col indices
+    pos_r = torch.arange(grid_h).unsqueeze(1).float()  # [H,1]
+    pos_c = torch.arange(grid_w).unsqueeze(1).float()  # [W,1]
+
+    # frequency terms
+    div_r_even = torch.exp(torch.arange(even1).float() * (-np.log(10000.0) / half1))
+    div_r_odd  = torch.exp(torch.arange(odd1).float()  * (-np.log(10000.0) / half1))
+    div_c_even = torch.exp(torch.arange(even2).float() * (-np.log(10000.0) / half2))
+    div_c_odd  = torch.exp(torch.arange(odd2).float()  * (-np.log(10000.0) / half2))
+
+    # build row & col PEs
+    row_pe = torch.zeros(grid_h, half1)
+    row_pe[:, 0::2] = torch.sin(pos_r * div_r_even)
+    row_pe[:, 1::2] = torch.cos(pos_r * div_r_odd)
+
+    col_pe = torch.zeros(grid_w, half2)
+    col_pe[:, 0::2] = torch.sin(pos_c * div_c_even)
+    col_pe[:, 1::2] = torch.cos(pos_c * div_c_odd)
+
     # combine into [H, W, d_model]
-    positional_enc = torch.zeros(grid_h, grid_w, d_model)
+    pe = torch.zeros(grid_h, grid_w, d_model)
     for i in range(grid_h):
         for j in range(grid_w):
-            positional_enc[i, j, :half1] = row_positional_enc[i]
-            positional_enc[i, j, half1:] = col_positional_enc[j]
-    # flatten to [H*W, d_model]
-    return positional_enc.view(grid_h * grid_w, d_model)
+            pe[i, j, :half1]  = row_pe[i]
+            pe[i, j, half1:] = col_pe[j]
+
+    return pe.view(grid_h * grid_w, d_model)
 
 
 class MLP(nn.Module):
-    def __init__(self, input_dim=49, hidden_dim=25, output_dim=10):
+    def __init__(self, input_dim, hidden_dim, output_dim):
         super(MLP, self).__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, output_dim)
@@ -56,14 +64,16 @@ class MLP(nn.Module):
 
 class TransformerEncoder(torch.nn.Module):
     def __init__(self, 
+                 config,
                  dim_in=49, 
                  dim_embed=49, #after projecting the input to the embedding dimension
                  dim_proj=49, 
                  dim_out=49, 
-                 num_heads=8, 
-                 num_encoders=6):
+                 num_heads=8):
         
         super().__init__()
+        # load config, config includes all hyperparameters of the run ie dimensions, batch size, number of patches, etc.
+        self.config = config
 
         # 1) Patch projection: map raw 49-D pixels → dim_embed (currently also 49)
         self.patch_proj = nn.Linear(dim_in, dim_embed)
@@ -76,16 +86,17 @@ class TransformerEncoder(torch.nn.Module):
 
         # 3) Stack of encoding blocks, now expecting dim_embed in/out
         self.encoding_blocks = torch.nn.ModuleList([
-            EncodingBlock(dim_in=dim_embed,
+            EncodingBlock(self.config,
+                          dim_in=dim_embed,
                           dim_proj=dim_embed,
                           dim_out=dim_out,
-                          num_heads=num_heads)
-            for _ in range(num_encoders)
+                          num_heads=self.config.num_heads)
+            for _ in range(self.config.num_encoders)
         ])
 
-        # 4) Final MLP for classification: average pooled embedding → logits
-        self.mlp = MLP(input_dim=dim_out, hidden_dim=25, output_dim=10)
-        # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output #TODO: add the cls token in
+        # 4) Initialise the MLPs
+        self.cls_head = MLP(input_dim=49, hidden_dim=25, output_dim=10)  # MLP for classification
+        self.mlp_between_blocks = MLP(input_dim=49, hidden_dim=49, output_dim=49)  # MLP to apply between encoding blocks        # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output #TODO: add the cls token in
       
     def forward(self, embedding, target_labels):
         """
@@ -95,6 +106,8 @@ class TransformerEncoder(torch.nn.Module):
         Returns:
         Cross-entropy loss.
         """
+        assert target_labels.shape == torch.Size([self.config.batch_size]), f"Expected target_labels shape ({self.config.batch_size}), got {target_labels.shape}"
+        embedding_n = embedding
         # Project raw pixels to a higher-dimensional embedding space
         # (although for now we still use 49) #TODO: select a better dim (e.g 64)
         embedding_n = self.patch_proj(embedding)
@@ -103,16 +116,16 @@ class TransformerEncoder(torch.nn.Module):
         embedding_n = embedding_n + self.pos_encoding 
 
         for encoding_block in self.encoding_blocks:
-            embedding_n = encoding_block(embedding_n)
-            ### TODO: add MLP to the output of each block?
+            embedding_n = encoding_block(embedding_n) # B, num_patches, dim_proj_V
+            assert embedding_n.shape == (self.config.batch_size, self.config.num_patches, self.config.dim_proj_V), f"Expected embedding_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {embedding_n.shape}"
+            embedding_n = self.mlp_between_blocks(embedding_n) # B, num_patches, dim_out
+            assert embedding_n.shape == (self.config.batch_size, self.config.num_patches, self.config.dim_out), f"Expected embedding_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {embedding_n.shape}"
 
-        # print(f"Final embedding_n shape before loss: {embedding_n.shape}")
-        # print(f"Target labels shape: {target_labels.shape}")
-
-        pooled = embedding_n.mean(dim=1)
-        # loss_fn = nn.CrossEntropyLoss()
-        logits = self.mlp(pooled)  # Assuming self.mlp is defined in the class
-        ### TODO: should we apply normalisation to prediction (softmax?)
+        pooled = embedding_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
+        assert pooled.shape == torch.Size([self.config.batch_size, self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
+        logits = self.cls_head(pooled)  # Assuming self.mlp is defined in the class
+        assert logits.shape == torch.Size([self.config.batch_size, 10]), f"Expected logits shape ({self.config.batch_size}, 10), got {logits.shape}"
+        ### TODO: apply normalisation to prediction (softmax?)
 
         # logits = self.cls_head(embedding_n)  # Classifier head for final output
         # print(f"logits shape: {logits.shape}")
@@ -128,16 +141,24 @@ class TransformerEncoder(torch.nn.Module):
         # return F.cross_entropy(logits, target_labels)
 
 class EncodingBlock(torch.nn.Module):
-    def __init__(self, dim_in=49, dim_proj=49, dim_out=49, num_heads=8):
+    def __init__(self, config, dim_in=49, dim_proj=49, dim_out=49, num_heads=8):
         super().__init__()
-
+        self.config = config
         self.heads = torch.nn.ModuleList([
-            SelfAttentionHead(dim_in=dim_in, dim_proj=dim_in, dim_out=dim_out) for _ in range(num_heads)
+            SelfAttentionHead(self.config, dim_in=dim_in, dim_proj=dim_in, dim_out=dim_out) for _ in range(num_heads)
         ])
-        self.W_out_proj = torch.nn.Linear(392, 49)  # Linear projection after concatenation of attention heads
-        # self.mlp = MLP(input_dim=49, hidden_dim=25, output_dim=10)  # Example MLP for classification
-        # print(f"Shape of out_proj weight: {self.W_out_proj.weight.shape}")
-        # assert self.out_proj.weight.shape == (16, 49),  f"Expected out_proj weight shape (16, 49), got {self.out_proj.weight.shape}"
+        # TODO add the project, layer norm and feedforward to diagram
+        # Linear projection after concatenation of attention heads
+        self.W_out_proj = nn.Linear(num_heads * dim_out, dim_out)  
+        # add layer normalization
+        self.layernorm1 = nn.LayerNorm(dim_out)
+        self.layernorm2 = nn.LayerNorm(dim_out)
+        # feedforward: typically expands then back
+        self.ffn = nn.Sequential(
+            nn.Linear(dim_out, dim_out * 4),
+            nn.GELU(),
+            nn.Linear(dim_out * 4, dim_out)
+        )
 
     def forward(self, embedding):
         # image_columns = image_to_patch_columns  # Assuming image is already embedded
@@ -145,26 +166,28 @@ class EncodingBlock(torch.nn.Module):
 
         ### concat all the outputs of the attention heads
         concat = torch.cat(head_outputs, dim=-1)  # Concatenate outputs of all attention heads along the feature dimension
+        # D linear project of the concatenated outputs to a new dim 
+        attn_out = self.W_out_proj(concat) 
+        # 
+        projected_embed = self.layernorm1(embedding + attn_out)
+        # feed forward
+        ffn_out = self.ffn(projected_embed)
+        # Add layer normalization after the feedforward network
+        out = self.layernorm2(projected_embed + ffn_out)
+        return out
 
-        ### linear projection of the concatenated output
-        # print(f"Shape of concatenated output: {concat.shape}") ## 
-        # print(f"Shape of out_proj weight: {self.W_out_proj.weight.shape}")
-        out_proj = torch.matmul(concat, self.W_out_proj.weight.t())  # Equivalent to self.W_out_proj(concat) without bias
-        # print(f"Shape of output after projection: {out_proj.shape}")
-        return out_proj  # Return the projected output
-        # return concat @ out_proj  # Project the concatenated output to the desired output dimension
-    
 class SelfAttentionHead(torch.nn.Module):
-    def __init__(self, dim_in, dim_proj, dim_out): ### TODO: seperate dim_v, dim_qk
+    def __init__(self, config, dim_in, dim_proj, dim_out): ### TODO: seperate dim_v, dim_qk
         ### TODO: include batch size in assertions
         super().__init__()
+        self.config = config
         self.dim_in = dim_in
         self.dim_proj = dim_proj
         self.dim_out = dim_out  
-        self.W_v = torch.nn.Linear(dim_in, dim_proj) ### (49, Y) Y=Z
-        self.W_q = torch.nn.Linear(dim_in, dim_proj) ### (49, Z)
-        self.W_k = torch.nn.Linear(dim_in, dim_proj) ### (49, Z)
-        self.W_h = torch.nn.Linear(dim_proj, dim_out) ### (Y, 49)    
+        self.W_q = nn.Linear(dim_in, dim_proj)
+        self.W_k = nn.Linear(dim_in, dim_proj)
+        self.W_v = nn.Linear(dim_in, dim_proj)
+        self.W_h = nn.Linear(dim_proj, dim_out)   
     
     def forward(self, embedding):
         """
