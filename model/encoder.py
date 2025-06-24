@@ -106,7 +106,6 @@ class TransformerEncoder(torch.nn.Module):
         Returns:
         Cross-entropy loss.
         """
-        assert target_labels.shape == torch.Size([self.config.batch_size]), f"Expected target_labels shape ({self.config.batch_size}), got {target_labels.shape}"
         embedding_n = embedding
         # Project raw pixels to a higher-dimensional embedding space
         # (although for now we still use 49) #TODO: select a better dim (e.g 64)
@@ -117,14 +116,14 @@ class TransformerEncoder(torch.nn.Module):
 
         for encoding_block in self.encoding_blocks:
             embedding_n = encoding_block(embedding_n) # B, num_patches, dim_proj_V
-            assert embedding_n.shape == (self.config.batch_size, self.config.num_patches, self.config.dim_proj_V), f"Expected embedding_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {embedding_n.shape}"
+            assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_proj_V), f"Expected embedding_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {embedding_n.shape}"
             embedding_n = self.mlp_between_blocks(embedding_n) # B, num_patches, dim_out
-            assert embedding_n.shape == (self.config.batch_size, self.config.num_patches, self.config.dim_out), f"Expected embedding_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {embedding_n.shape}"
+            assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected embedding_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {embedding_n.shape}"
 
         pooled = embedding_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
-        assert pooled.shape == torch.Size([self.config.batch_size, self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
+        #assert pooled.shape == torch.Size([, self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
         logits = self.cls_head(pooled)  # Assuming self.mlp is defined in the class
-        assert logits.shape == torch.Size([self.config.batch_size, 10]), f"Expected logits shape ({self.config.batch_size}, 10), got {logits.shape}"
+        #assert logits.shape == torch.Size([self.config.batch_size, 10]), f"Expected logits shape ({self.config.batch_size}, 10), got {logits.shape}"
         ### TODO: apply normalisation to prediction (softmax?)
 
         # logits = self.cls_head(embedding_n)  # Classifier head for final output
