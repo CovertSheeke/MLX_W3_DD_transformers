@@ -27,7 +27,6 @@ enc = encoder.TransformerEncoder().to(dev)
 ## initialize WandB for logging
 wandb.init(
     project="mlx_wk3_mnist_transformer",
-    entity="ethangledwards",  # Replace with your WandB entity
     name=f"mnist_transformer_{ts}",
     config={
         "learning_rate": 0.001,
