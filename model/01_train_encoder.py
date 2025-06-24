@@ -84,11 +84,6 @@ for epoch in range(wandb.config.num_epochs):
         if idx % 100 == 0:
             prgs.set_postfix({"loss": loss.item()})
             print(f"Epoch {epoch + 1}, Batch {idx + 1}, Loss: {loss.item()}")
-
-# Save the model   
-model_path = os.path.join(os.path.dirname(__file__), '..', 'models', f'mnist_transformer_{ts}.pt')
-torch.save(enc.state_dict(), model_path)
-print(f"Model saved to {model_path}")
         
 
 wandb.finish()
