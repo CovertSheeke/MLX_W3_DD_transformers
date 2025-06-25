@@ -27,7 +27,7 @@ wandb.init(
     name=f"mnist_transformer_{ts}",
     config={
         "learning_rate": 0.0001,
-        "batch_size": 512,
+        "batch_size": 1024,
         "num_epochs": 2,
         "num_heads": 8,
         "num_encoders": 8,
