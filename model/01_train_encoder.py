@@ -26,8 +26,8 @@ wandb.init(
     project="mlx_wk3_mnist_transformer",
     name=f"mnist_transformer_{ts}",
     config={
-        "learning_rate": 0.001,
-        "batch_size": 64,
+        "learning_rate": 0.0001,
+        "batch_size": 512,
         "num_epochs": 2,
         "num_heads": 8,
         "num_encoders": 8,

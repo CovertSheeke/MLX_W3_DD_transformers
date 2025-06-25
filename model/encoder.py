@@ -1,11 +1,12 @@
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-
+import math 
 import numpy as np
 from patch_and_embed import image_to_patch_columns
 
 # Function to get 2D sinusoidal positional encodings
+#TODO: if we change patch count (including adding a CLS token) this will break
 def get_2d_sincos_pos_enc(grid_h: int, grid_w: int, d_model: int) -> torch.Tensor:
     """
     Return a [grid_h*grid_w, d_model] tensor of fixed 2D sinusoidal positional encodings.
@@ -14,39 +15,29 @@ def get_2d_sincos_pos_enc(grid_h: int, grid_w: int, d_model: int) -> torch.Tenso
     second half gets the column position encoding added.
     """
     # how many dims for row vs col
-    half1 = d_model // 2
-    half2 = d_model - half1
-    # how many even/odd slots in each half
-    even1 = (half1 + 1) // 2
-    odd1  = half1 // 2
-    even2 = (half2 + 1) // 2
-    odd2  = half2 // 2
+    half1 = d_model // 2                 # dims for the row signal
+    half2 = d_model - half1              # dims for the col signal
 
-    # row and col indices
-    pos_r = torch.arange(grid_h).unsqueeze(1).float()  # [H,1]
-    pos_c = torch.arange(grid_w).unsqueeze(1).float()  # [W,1]
+    # Frequencies for rows and cols
+    div_r = 10000 ** (torch.arange(half1, dtype=torch.float32) / half1)
+    div_c = 10000 ** (torch.arange(half2, dtype=torch.float32) / half2)
 
-    # frequency terms
-    div_r_even = torch.exp(torch.arange(even1).float() * (-np.log(10000.0) / half1))
-    div_r_odd  = torch.exp(torch.arange(odd1).float()  * (-np.log(10000.0) / half1))
-    div_c_even = torch.exp(torch.arange(even2).float() * (-np.log(10000.0) / half2))
-    div_c_odd  = torch.exp(torch.arange(odd2).float()  * (-np.log(10000.0) / half2))
+    # Row/col positions
+    pos_r = torch.arange(grid_h, dtype=torch.float32)[:, None]  # [H,1]
+    pos_c = torch.arange(grid_w, dtype=torch.float32)[:, None]  # [W,1]
 
-    # build row & col PEs
-    row_pe = torch.zeros(grid_h, half1)
-    row_pe[:, 0::2] = torch.sin(pos_r * div_r_even)
-    row_pe[:, 1::2] = torch.cos(pos_r * div_r_odd)
+    # [H, half1] and [W, half2]
+    pe_r = torch.cat(
+        (torch.sin(pos_r / div_r[::2]), torch.cos(pos_r / div_r[1::2])), dim=1
+    )
+    pe_c = torch.cat(
+        (torch.sin(pos_c / div_c[::2]), torch.cos(pos_c / div_c[1::2])), dim=1
+    )
 
-    col_pe = torch.zeros(grid_w, half2)
-    col_pe[:, 0::2] = torch.sin(pos_c * div_c_even)
-    col_pe[:, 1::2] = torch.cos(pos_c * div_c_odd)
-
-    # combine into [H, W, d_model]
+    # Broadcast & interleave row/col encodings → [H, W, d_model]
     pe = torch.zeros(grid_h, grid_w, d_model)
-    for i in range(grid_h):
-        for j in range(grid_w):
-            pe[i, j, :half1]  = row_pe[i]
-            pe[i, j, half1:] = col_pe[j]
+    pe[:, :, :half1] = pe_r[:, None, :]
+    pe[:, :, half1:] = pe_c[None, :, :]
 
     return pe.view(grid_h * grid_w, d_model)
 
@@ -209,31 +200,25 @@ class SelfAttentionHead(torch.nn.Module):
         # assert V.shape == (16, self.dim_proj), f"Expected V shape (16, {self.dim_proj}), got {V.shape}"
         # assert Q.shape == (16, self.dim_proj), f"Expected Q shape (16, {self.dim_proj}), got {Q.shape}"
 
+        ### Scaled dot-product attention
+        # Each query row i is dotted with every key row j → a score telling us
+        # how much patch i “cares” about patch j.
+        # We divide by √d_k to keep the variance of the scores roughly constant
+        # regardless of embedding size (otherwise softmax saturates for large d_k).
+        d_k: float = math.sqrt(K.size(-1))            # dim_proj as a scalar
+        attn_scores: torch.Tensor = (Q @ K.transpose(-2, -1)) / d_k  # [B, P, P]
+        # Softmax turns scores into non-negative weights that sum to 1 along the
+        # “from-patch” axis (last dim) – the classic “where should I look?” question.
+        attn_weights: torch.Tensor = F.softmax(attn_scores, dim=-1)  # [B, P, P]
 
-        # Q = torch.matmul(embedding, self.W_q)
-        # K = torch.matmul(embedding, self.W_k)
-        # V = torch.matmul(embedding, self.W_v)
-
-        # Compute attention scores
-        A = Q @ K.transpose(-2, -1)  # (batch_size, num_patches, num_patches)
-        # debug shape
-        # print(f"A shape: {A.shape}")
-        # assert A.shape == (16, 16), f"Expected A shape (16, 16), got {A.shape}"
-        ### TODO: maybe remove the epsilon
-        eps = 1e-6  # Small epsilon to avoid division by zero
-        scale = np.sqrt(K.size(-1)) + eps
-        attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / scale
-        ### TODO: check if this is correct, we were trying to avoid nannvalues, maybe this isn't the best place to do this
-        attention_scores = torch.clamp(attention_scores, min=-30.0, max=30.0)  # Prevent softmax overflow
-        attention_weights = F.softmax(attention_scores, dim=-1)
-
-        # Compute output
-        attention_out = attention_weights @ V  # (batch_size, num_patches, dim_proj)
+        # Each output patch is now a weighted average of the value vectors, with the
+        # weights decided by its query–key similarity.
+        attn_out: torch.Tensor = attn_weights @ V     # [B, P, dim_proj]
         
-        # Linear projection for dimensionality
-        output = self.W_h(attention_out)  # (batch_size, num_patches, dim_out)
         # Debugging output shape
-        # print(f"Output shape: {output.shape}")
-        # assert output.shape == (16, 49), f"Expected output shape (16, 49), got {output.shape}"
+        # print(f"Output shape: {attn_out.shape}")
+        # assert attn_out.shape == (16, 49), f"Expected output shape (16, 49), got {attn_out.shape}"
 
-        return output
+        # Final linear layer mixes the attended features and sets the channel size
+        # expected by the next layer (dim_out).  Nothing fancy, just W_h * x + b.
+        return self.W_h(attn_out)                     # [B, P, dim_out]
