@@ -108,7 +108,7 @@ def main() -> None:
             if acc > best_accuracy:
               best_accuracy = acc
               # Save the model
-              torch.save(enc.state_dict(), f"mnist_transformer_best_{ts}.pth")
+              torch.save(model.state_dict(), f"mnist_transformer_best_{ts}.pth")
 #               print(f"New best accuracy: {best_accuracy}, model saved.")
             loss.backward()
             optimiser.step()
@@ -121,7 +121,7 @@ def main() -> None:
         wandb.log({"val_loss": val_loss, "val_acc": val_acc, "epoch": epoch})
         print(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}")
         # Save the model
-        torch.save(enc.state_dict(), f"mnist_transformer_epoch_{epoch + 1}_{ts}.pth")
+        torch.save(model.state_dict(), f"mnist_transformer_epoch_{epoch + 1}_{ts}.pth")
 
     wandb.finish()
     print("Training complete.")
