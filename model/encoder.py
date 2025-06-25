@@ -186,32 +186,25 @@ class SelfAttentionHead(torch.nn.Module):
         assert V.shape[-2:] == (self.num_patches, self.dim_proj_V), f"Expected V shape (16, {self.dim_proj_V}), got {V.shape}"
         assert Q.shape[-2:] == (self.num_patches, self.dim_proj_QK), f"Expected Q shape (16, {self.dim_proj_QK}), got {Q.shape}"
 
-         ### Scaled dot-product attention
+        ### Scaled dot-product attention
         # Each query row i is dotted with every key row j → a score telling us
         # how much patch i “cares” about patch j.
         # We divide by √d_k to keep the variance of the scores roughly constant
         # regardless of embedding size (otherwise softmax saturates for large d_k).
-        
-        A = Q @ K.transpose(-2, -1) * (K.size(-1) ** -0.5) # (batch_size, num_patches, num_patches)
-        assert A.shape[-2:] == (self.num_patches, self.num_patches), f"Expected A shape ({self.num_patches}, {self.num_patches}), got {A.shape}"
-    
-      # Softmax turns scores into non-negative weights that sum to 1 along the
+        d_k: float = math.sqrt(K.size(-1))            # dim_proj as a scalar
+        attn_scores: torch.Tensor = (Q @ K.transpose(-2, -1)) / d_k  # [B, P, P]
+        # Softmax turns scores into non-negative weights that sum to 1 along the
         # “from-patch” axis (last dim) – the classic “where should I look?” question.
-        ### TODO: check if this is correct, we were trying to avoid nannvalues, maybe this isn't the best place to do this
-        attention_scores = torch.clamp(A, min=-30.0, max=30.0)  # Prevent softmax overflow
-        attention_weights = F.softmax(attention_scores, dim=-1)
+        attn_weights: torch.Tensor = F.softmax(attn_scores, dim=-1)  # [B, P, P]
 
         # Each output patch is now a weighted average of the value vectors, with the
         # weights decided by its query–key similarity.
-        attention_out = attention_weights @ V  # (batch_size, num_patches, dim_proj)
-        assert attention_out.shape[-2:] == (self.num_patches, self.dim_proj_V), f"Expected attention_out shape ({self.num_patches}, {self.dim_proj_V}), got {attention_out.shape}"
-        
-        # Linear projection for dimensionality
-        output = self.W_h(attention_out)  # (batch_size, num_patches, dim_out)
-        assert output.shape[-2:] == (self.num_patches, self.dim_out), f"Expected output shape ({self.num_patches}, {self.dim_out}), got {output.shape}"
-        
+        attn_out: torch.Tensor = attn_weights @ V     # [B, P, dim_proj]
 
+        # Debugging output shape
+        # print(f"Output shape: {attn_out.shape}")
+        # assert attn_out.shape == (16, 49), f"Expected output shape (16, 49), got {attn_out.shape}"
 
         # Final linear layer mixes the attended features and sets the channel size
         # expected by the next layer (dim_out).  Nothing fancy, just W_h * x + b.
-        return output                     # [B, P, dim_out]
+        return self.W_h(attn_out)                     # [B, P, dim_out]
