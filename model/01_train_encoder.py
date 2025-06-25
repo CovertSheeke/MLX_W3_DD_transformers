@@ -92,6 +92,7 @@ def main() -> None:
     optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
 
     # --- training & validation loop ---
+    best_accuracy = 0.0
     for epoch in range(1, wandb.config.num_epochs + 1):
         model.train()
         loop = tqdm.tqdm(train_loader, desc=f"Epoch {epoch}/{wandb.config.num_epochs}")
@@ -104,16 +105,23 @@ def main() -> None:
             ).to(dev)
             optimiser.zero_grad()
             loss, acc = model(img_embs, trgs)
+            if acc > best_accuracy:
+              best_accuracy = acc
+              # Save the model
+              torch.save(enc.state_dict(), f"mnist_transformer_best_{ts}.pth")
+#               print(f"New best accuracy: {best_accuracy}, model saved.")
             loss.backward()
             optimiser.step()
             wandb.log({"train_loss": loss.item(), "train_acc": acc, "epoch": epoch})
             if batch_idx % 100 == 0:
                 loop.set_postfix(loss=loss.item())
-
+        
         # end of epoch → validation
         val_loss, val_acc = evaluate(model, val_loader, dev)
         wandb.log({"val_loss": val_loss, "val_acc": val_acc, "epoch": epoch})
         print(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}")
+        # Save the model
+        torch.save(enc.state_dict(), f"mnist_transformer_epoch_{epoch + 1}_{ts}.pth")
 
     wandb.finish()
     print("Training complete.")
