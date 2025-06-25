@@ -49,7 +49,7 @@ class MLP(nn.Module):
         self.fc2 = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
+        x = self.fc1(x)
         x = self.fc2(x)
         return x
 
@@ -108,13 +108,15 @@ class TransformerEncoder(torch.nn.Module):
         for encoding_block in self.encoding_blocks:
             embedding_n = encoding_block(embedding_n) # B, num_patches, dim_proj_V
             assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_proj_V), f"Expected embedding_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {embedding_n.shape}"
+            assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_proj_V), f"Expected embedding_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {embedding_n.shape}"
             embedding_n = self.mlp_between_blocks(embedding_n) # B, num_patches, dim_out
+            assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected embedding_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {embedding_n.shape}"
             assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected embedding_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {embedding_n.shape}"
 
         pooled = embedding_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
-        #assert pooled.shape == torch.Size([, self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
-        logits = self.cls_head(pooled)  # Assuming self.mlp is defined in the class
-        #assert logits.shape == torch.Size([self.config.batch_size, 10]), f"Expected logits shape ({self.config.batch_size}, 10), got {logits.shape}"
+        assert pooled.shape[-1:] == torch.Size([self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
+        predictions = self.cls_head(pooled)  # Assuming self.mlp is defined in the class
+        assert predictions.shape[-1:] == torch.Size([10]), f"Expected predictions shape ({self.config.batch_size}, 10), got {predictions.shape}"
         ### TODO: apply normalisation to prediction (softmax?)
 
         # logits = self.cls_head(embedding_n)  # Classifier head for final output
@@ -123,7 +125,7 @@ class TransformerEncoder(torch.nn.Module):
         # print(f"Pooled logits shape: {pooled.shape}")
 
         # Compute cross-entropy loss
-        return F.cross_entropy(logits, target_labels)
+        return F.cross_entropy(predictions, target_labels), accuracy
         
 
 
