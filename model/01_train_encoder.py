@@ -1,90 +1,122 @@
 import torch
-import encoder
-import patch_and_embed
-import pickle
-import wandb 
-import tqdm
+import torch.nn.functional as F
+import torch.nn as nn
+import math
+import numpy as np
 import datetime
 import os
+import pickle
+import wandb
+import tqdm
+from patch_and_embed import image_to_patch_columns
+from encoder import TransformerEncoder
+from torch.utils.data import random_split, DataLoader, TensorDataset
 
-## setup timestamp and seed for reproducibility
-torch.manual_seed(42)
-ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+# Globals
+VAL_SIZE = 10000  # number of samples for validation
 
-## Load the MNIST dataset
+def evaluate(
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device,
+) -> tuple[float, float]:
+    """Run model on dataloader and return (avg_loss, avg_accuracy)."""
+    model.eval()
+    total_loss, total_acc, total_samples = 0.0, 0.0, 0
+    with torch.no_grad():
+        for imgs, targets in dataloader:
+            imgs, targets = imgs.to(device), targets.to(device)
+            img_embs = image_to_patch_columns(
+                imgs,
+                patch_size=wandb.config.patch_size,
+                stride=wandb.config.stride,
+            ).to(device)
+            loss, acc = model(img_embs, targets)
+            batch_size = imgs.size(0)
+            total_loss += loss.item() * batch_size
+            total_acc += acc.item() * batch_size
+            total_samples += batch_size
+    avg_loss = total_loss / total_samples
+    avg_acc = total_acc / total_samples
+    return avg_loss, avg_acc
 
-data_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'mnist_trainset.pkl')
-with open(os.path.abspath(data_path), 'rb') as f:
-    trainset = pickle.load(f)
+def main() -> None:
+    # --- setup seed, timestamp, device, W&B ---
+    torch.manual_seed(42)
+    ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print("Using device:", dev)
+    wandb.init(
+        entity=os.environ.get("WANDB_ENTITY"),
+        project="mlx_wk3_mnist_transformer",
+        name=f"mnist_transformer_{ts}",
+        config={
+            "learning_rate": 1e-4,
+            "batch_size": 1024,
+            "num_epochs": 100,
+            "num_heads": 8,
+            "num_encoders": 8,
+            "num_patches": 16,
+            "patch_size": 7,
+            "stride": 7,
+            "dim_patch": 49,
+            "dim_proj_V": 49,
+            "dim_proj_QK": 49,
+            "dim_out": 49,
+            "dim_in": 49,
+            "mlp_hidden_dim": 25,
+        },
+    )
 
-## Set up the device for training
-dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device:", dev)
+    # --- load and normalise data ---
+    data_path = os.path.join(os.path.dirname(__file__), "..", "data", "mnist_trainset.pkl")
+    with open(os.path.abspath(data_path), "rb") as f:
+        fullset = pickle.load(f)
+    ds = fullset.data.float().div(255.0)
+    ds = ds.sub_(0.1307).div_(0.3081)  # MNIST normalisation
+    targets = fullset.targets
 
-## initialize WandB for logging
-wandb.init(
-    entity=os.environ.get("WANDB_ENTITY"),
-    project="mlx_wk3_mnist_transformer",
-    name=f"mnist_transformer_{ts}",
-    config={
-        "learning_rate": 0.0001,
-        "batch_size": 1024,
-        "num_epochs": 2,
-        "num_heads": 8,
-        "num_encoders": 8,
-        "num_patches": 16,  # Assuming a fixed number of patches, e.g., 16 for MNIST
-        "patch_size": 7,
-        "stride": 7,
-        "dim_patch": 49,  # Assuming each patch is flattened to a vector of size 49 (7x7)
-        "dim_proj_V": 49,  # Projection dimension for value matrix, can be same as dim_in
-        "dim_proj_QK": 49,  # Projection dimension for key&query matrices, can be same as dim_in
-        "dim_out": 49,
-        "dim_in": 49,  # Output dimension, must be same as dim_in
-        "mlp_hidden_dim": 25,  # Hidden dimension for MLP
-    }
-)
+    # --- split into train/val ---
+    train_size = len(ds) - VAL_SIZE
+    train_ds, val_ds = random_split(
+        TensorDataset(ds, targets),
+        [train_size, VAL_SIZE],
+        generator=torch.Generator().manual_seed(42),
+    )
 
-## Initialize the encoder
-enc = encoder.TransformerEncoder(wandb.config).to(dev)
+    train_loader = DataLoader(train_ds, batch_size=wandb.config.batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=wandb.config.batch_size, shuffle=False)
 
-# Prepare the dataset and dataloader
-print("Preparing dataset and dataloader...")
-# Scale dataset to be from [0,1], move to device
-ds = trainset.data.float().div(255.0).to(dev)
-# Standardise to zero mean/unit variance (MNIST stats)
-MNIST_MEAN = 0.1307
-MNIST_STD = 0.3081
-ds = ds.sub_(MNIST_MEAN).div_(MNIST_STD)
-# Move targets to device as well
-data_targets = trainset.targets.to(dev)
-###TODO: how are the targets shaped? do we need to onehot encode?
-dl = torch.utils.data.DataLoader(
-    torch.utils.data.TensorDataset(ds, data_targets),
-    batch_size=wandb.config.batch_size,
-    shuffle=True
-)
-opt = torch.optim.Adam(enc.parameters(), lr=wandb.config.learning_rate)
+    # --- model, optimiser ---
+    model = TransformerEncoder(wandb.config).to(dev)
+    optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
 
-# Define the training loop
-print("Starting training...")
-for epoch in range(wandb.config.num_epochs):
-    prgs = tqdm.tqdm(dl, desc=f"Epoch {epoch+1}/{wandb.config.num_epochs}")
-    for idx, (imgs, trgs) in enumerate(prgs):
-        imgs, trgs = imgs.to(dev), trgs.to(dev)
-        # print("imgs shape: ", imgs.shape, "trgs shape: ", trgs.shape)
-        img_embs = patch_and_embed.image_to_patch_columns(imgs, patch_size=wandb.config.patch_size, stride=wandb.config.stride)
-        img_embs = img_embs.to(dev)
-        # print(f"Image embeddings shape: {img_embs.shape}, Targets shape: {trgs.shape}")
-        opt.zero_grad()
-        loss, accuracy = enc(img_embs, trgs)
-        loss.backward()
-        opt.step()
-        wandb.log({"loss": loss.item(), "accuracy": accuracy, "epoch": epoch + 1, "batch": idx + 1})
-        # print("MADE IT HERE")
-        if idx % 100 == 0:
-            prgs.set_postfix({"loss": loss.item()})
-            print(f"Epoch {epoch + 1}, Batch {idx + 1}, Loss: {loss.item()}")
+    # --- training & validation loop ---
+    for epoch in range(1, wandb.config.num_epochs + 1):
+        model.train()
+        loop = tqdm.tqdm(train_loader, desc=f"Epoch {epoch}/{wandb.config.num_epochs}")
+        for batch_idx, (imgs, trgs) in enumerate(loop, start=1):
+            imgs, trgs = imgs.to(dev), trgs.to(dev)
+            img_embs = image_to_patch_columns(
+                imgs,
+                patch_size=wandb.config.patch_size,
+                stride=wandb.config.stride,
+            ).to(dev)
+            optimiser.zero_grad()
+            loss, acc = model(img_embs, trgs)
+            loss.backward()
+            optimiser.step()
+            wandb.log({"train_loss": loss.item(), "train_acc": acc, "epoch": epoch})
+            if batch_idx % 100 == 0:
+                loop.set_postfix(loss=loss.item())
 
+        # end of epoch → validation
+        val_loss, val_acc = evaluate(model, val_loader, dev)
+        wandb.log({"val_loss": val_loss, "val_acc": val_acc, "epoch": epoch})
+        print(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}")
 
-wandb.finish()
-print("Training complete. Model saved and logged to WandB.")
+    wandb.finish()
+    print("Training complete.")
+
+if __name__ == "__main__":
+    main()
