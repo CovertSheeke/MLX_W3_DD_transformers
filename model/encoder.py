@@ -16,73 +16,39 @@ class MLP(nn.Module):
         return x
 
 class TransformerEncoder(torch.nn.Module):
-    def __init__(self, config, dim_in=49, dim_proj=49, dim_out=49, num_heads=8):
+    def __init__(self, config):
         super().__init__()
         # load config, config includes all hyperparameters of the run ie dimensions, batch size, number of patches, etc.
         self.config = config
-        # --- Test case: print cross-entropy for random predictions and target labels ---
-        # Simulate random predictions and target labels for demonstration
-        # batch_size = self.config.batch_size
-        # num_classes = 10
-        # torch.manual_seed(42)
-        # random_logits = torch.randn(batch_size, num_classes)
-        # random_targets = torch.randint(0, num_classes, (batch_size,))
-        # test_loss = F.cross_entropy(random_logits, random_targets)
-        # print("Random logits:\n", random_logits)
-        # print("Random target labels:\n", random_targets)
-        # print("Cross-entropy loss for random predictions:", test_loss.item())
-        
-        # # --- Test case: perfect predictions (one-hot at correct class) ---
-        # perfect_logits = torch.zeros(batch_size, num_classes)
-        # perfect_logits[torch.arange(batch_size), random_targets] = 100.0  # Set correct class to 1
-        # perfect_loss = F.cross_entropy(perfect_logits, random_targets)
-        # # print("Perfect logits:\n", perfect_logits)
-        # # Print perfect logits and random targets side by side for comparison
-        # for i in range(batch_size):
-        #     print(f"Perfect logits[{i}]: {perfect_logits[i].tolist()} | Random target: {random_targets[i].item()}")
-        # print("Cross-entropy loss for perfect predictions:", perfect_loss.item())
 
         # initialise the encoding blocks
         self.encoding_blocks = torch.nn.ModuleList([
-            EncodingBlock(self.config, dim_in=49, dim_proj=49, dim_out=49, num_heads=self.config.num_heads) for _ in range(self.config.num_encoders)
+            EncodingBlock(self.config, dim_in=self.config.dim_in, dim_proj=self.config.dim_proj, dim_out=self.config.dim_out, num_heads=self.config.num_heads) for _ in range(self.config.num_encoders)
         ])
 
         # initialise the MLPs
         self.cls_head = MLP(input_dim=49, hidden_dim=25, output_dim=10)  # MLP for classification
         self.mlp_between_blocks = MLP(input_dim=49, hidden_dim=49, output_dim=49)  # MLP to apply between encoding blocks
       
-    def forward(self, embedding, target_labels):
-        embedding_n = embedding
+    def forward(self, x, trg):
+        x_n = x
         for encoding_block in self.encoding_blocks:
-            embedding_n = encoding_block(embedding_n) # B, num_patches, dim_proj_V
-            assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_proj_V), f"Expected embedding_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {embedding_n.shape}"
-            embedding_n = self.mlp_between_blocks(embedding_n) # B, num_patches, dim_out
-            assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected embedding_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {embedding_n.shape}"
+            x_n = encoding_block(x_n) # B, num_patches, dim_proj_V
+            assert x_n.shape[-2:] == (self.config.num_patches, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
+            x_n = self.mlp_between_blocks(x_n) # B, num_patches, dim_out
+            assert x_n.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected x_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {x_n.shape}"
 
-        pooled = embedding_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
+        pooled = x_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
         assert pooled.shape[-1:] == torch.Size([self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
         predictions = self.cls_head(pooled)  # Assuming self.mlp is defined in the class
         assert predictions.shape[-1:] == torch.Size([10]), f"Expected predictions shape ({self.config.batch_size}, 10), got {predictions.shape}"
         
         pred_classes = predictions.argmax(dim=1)
-        correct = (pred_classes == target_labels).float().sum()
+        correct = (pred_classes == trg).float().sum()
         accuracy = correct / predictions.shape[0]
-        # print(f"Batch accuracy: {accuracy.item():.4f}")
-
-
-        # predictions = self.cls_head(embedding_n)  # Classifier head for final output
-        # print(f"Predictions shape: {predictions.shape}")
-        # # Average pool over the 16 (num_patches) dimension to get shape (batch_size, dim_out)
-        # print(f"Pooled predictions shape: {pooled.shape}")
-        
-
+        loss = F.cross_entropy(predictions, trg)
         # Compute cross-entropy loss
-        return F.cross_entropy(predictions, target_labels), accuracy
-        
-
-
-        # target_labels should be class indices (LongTensor), not one-hot encoded
-        # return F.cross_entropy(predictions, target_labels)
+        return loss, accuracy
 
 class EncodingBlock(torch.nn.Module):
     def __init__(self, config, dim_in=49, dim_proj=49, dim_out=49, num_heads=8):
@@ -102,11 +68,12 @@ class EncodingBlock(torch.nn.Module):
 
         ### concat all the outputs of the attention heads
         concat = torch.cat(head_outputs, dim=-1)  # Concatenate outputs of all attention heads along the feature dimension
-
+        assert concat.shape[-2:] == (self.config.num_patches, (self.config.num_heads * self.config.dim_out)), f"Expected concatenated output shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.num_heads * self.config.dim_out}), got {concat.shape}"
         ### linear projection of the concatenated output
         # print(f"Shape of concatenated output: {concat.shape}") ## 
         # print(f"Shape of out_proj weight: {self.W_out_proj.weight.shape}")
         out_proj = torch.matmul(concat, self.W_out_proj.weight.t())  # Equivalent to self.W_out_proj(concat) without bias
+        assert out_proj.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected output projection shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {out_proj.shape}"
         # print(f"Shape of output after projection: {out_proj.shape}")
         return out_proj  # Return the projected output
         # return concat @ out_proj  # Project the concatenated output to the desired output dimension
