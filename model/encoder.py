@@ -61,27 +61,23 @@ class TransformerEncoder(torch.nn.Module):
         self.config = config
 
         # 1) Patch projection: map raw 49-D pixels → dim_embed (currently also 49)
-        self.patch_proj = nn.Linear(dim_in, dim_embed)
+        self.patch_proj = nn.Linear(self.config.dim_patch, self.config.dim_in)
 
         # 2) Fixed 2D sinusoidal positional encoding for a 4×4 grid
         #  Compute once, register as buffer so it’s moved with model but not learned.
         # TODO: un-hard code the grid dims
-        pos_enc = get_2d_sincos_pos_enc(grid_h=4, grid_w=4, d_model=dim_embed)  # [16, dim_embed]
+        pos_enc = get_2d_sincos_pos_enc(grid_h=4, grid_w=4, d_model=self.config.dim_in)  # [16, dim_embed]
         self.register_buffer("pos_encoding", pos_enc.unsqueeze(0))  # shape [1,16,dim_embed]
 
         # 3) Stack of encoding blocks, now expecting dim_embed in/out
         self.encoding_blocks = torch.nn.ModuleList([
-            EncodingBlock(self.config,
-                          dim_in=dim_embed,
-                          dim_proj=dim_embed,
-                          dim_out=dim_out,
-                          num_heads=self.config.num_heads)
+            EncodingBlock(self.config)
             for _ in range(self.config.num_encoders)
         ])
 
         # 4) Initialise the MLPs
-        self.cls_head = MLP(input_dim=49, hidden_dim=25, output_dim=10)  # MLP for classification
-        self.mlp_between_blocks = MLP(input_dim=49, hidden_dim=49, output_dim=49)  # MLP to apply between encoding blocks        # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output #TODO: add the cls token in
+        self.cls_head = MLP(input_dim=self.config.dim_in, hidden_dim=self.config.mlp_hidden_dim, output_dim=10)  # MLP for classification
+        self.mlp_between_blocks = MLP(input_dim=self.config.dim_out, hidden_dim=self.config.mlp_hidden_dim, output_dim=self.config.dim_in)  # MLP to apply between encoding blocks        # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output #TODO: add the cls token in
       
     def forward(self, x, trg):
         """
@@ -124,13 +120,13 @@ class EncodingBlock(torch.nn.Module):
         # Linear projection after concatenation of attention heads
         self.W_out_proj = torch.nn.Linear(self.config.num_heads*self.config.dim_out, self.config.dim_out)  
         # add layer normalization
-        self.layernorm1 = nn.LayerNorm(dim_out)
-        self.layernorm2 = nn.LayerNorm(dim_out)
+        self.layernorm1 = nn.LayerNorm(self.config.dim_out)  # Normalization after attention
+        self.layernorm2 = nn.LayerNorm(self.config.dim_out)  # Normalization after feedforward
         # feedforward: typically expands then back
         self.ffn = nn.Sequential(
-            nn.Linear(dim_out, dim_out * 4),
+            nn.Linear(self.config.dim_out, self.config.dim_out * 4),
             nn.GELU(),
-            nn.Linear(dim_out * 4, dim_out)
+            nn.Linear(self.config.dim_out * 4, self.config.dim_out)
         )
 
     def forward(self, x):
@@ -215,4 +211,4 @@ class SelfAttentionHead(torch.nn.Module):
 
         # Final linear layer mixes the attended features and sets the channel size
         # expected by the next layer (dim_out).  Nothing fancy, just W_h * x + b.
-        return self.W_h(attn_out)                     # [B, P, dim_out]
+        return output                     # [B, P, dim_out]
