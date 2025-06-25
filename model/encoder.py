@@ -23,12 +23,12 @@ class TransformerEncoder(torch.nn.Module):
 
         # initialise the encoding blocks
         self.encoding_blocks = torch.nn.ModuleList([
-            EncodingBlock(self.config, dim_in=self.config.dim_in, dim_proj=self.config.dim_proj, dim_out=self.config.dim_out, num_heads=self.config.num_heads) for _ in range(self.config.num_encoders)
+            EncodingBlock(self.config) for _ in range(self.config.num_encoders)
         ])
 
         # initialise the MLPs
-        self.cls_head = MLP(input_dim=49, hidden_dim=25, output_dim=10)  # MLP for classification
-        self.mlp_between_blocks = MLP(input_dim=49, hidden_dim=49, output_dim=49)  # MLP to apply between encoding blocks
+        self.cls_head = MLP(input_dim=self.config.dim_out, hidden_dim=self.config.mlp_hidden_dim, output_dim=10)  # MLP for classification
+        self.mlp_between_blocks = MLP(input_dim=self.config.dim_out, hidden_dim=self.config.mlp_hidden_dim, output_dim=self.config.dim_in)  # MLP to apply between encoding blocks
       
     def forward(self, x, trg):
         x_n = x
@@ -51,47 +51,41 @@ class TransformerEncoder(torch.nn.Module):
         return loss, accuracy
 
 class EncodingBlock(torch.nn.Module):
-    def __init__(self, config, dim_in=49, dim_proj=49, dim_out=49, num_heads=8):
+    def __init__(self, config):
         super().__init__()
         self.config = config
         self.heads = torch.nn.ModuleList([
-            SelfAttentionHead(self.config, dim_in=dim_in, dim_proj=dim_in, dim_out=dim_out) for _ in range(num_heads)
+            SelfAttentionHead(self.config) for _ in range(self.config.num_heads)
         ])
-        self.W_out_proj = torch.nn.Linear(392, 49)  # Linear projection after concatenation of attention heads
-        # self.mlp = MLP(input_dim=49, hidden_dim=25, output_dim=10)  # Example MLP for classification
-        # print(f"Shape of out_proj weight: {self.W_out_proj.weight.shape}")
-        # assert self.out_proj.weight.shape == (16, 49),  f"Expected out_proj weight shape (16, 49), got {self.out_proj.weight.shape}"
+        self.W_out_proj = torch.nn.Linear(self.config.num_heads*self.config.dim_out, self.config.dim_out)  # Linear projection after concatenation of attention heads
 
-    def forward(self, embedding):
-        # image_columns = image_to_patch_columns  # Assuming image is already embedded
-        head_outputs = [head(embedding) for head in self.heads]
+    def forward(self, x):
+        head_outputs = [head(x) for head in self.heads]
 
         ### concat all the outputs of the attention heads
         concat = torch.cat(head_outputs, dim=-1)  # Concatenate outputs of all attention heads along the feature dimension
         assert concat.shape[-2:] == (self.config.num_patches, (self.config.num_heads * self.config.dim_out)), f"Expected concatenated output shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.num_heads * self.config.dim_out}), got {concat.shape}"
         ### linear projection of the concatenated output
-        # print(f"Shape of concatenated output: {concat.shape}") ## 
-        # print(f"Shape of out_proj weight: {self.W_out_proj.weight.shape}")
         out_proj = torch.matmul(concat, self.W_out_proj.weight.t())  # Equivalent to self.W_out_proj(concat) without bias
         assert out_proj.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected output projection shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {out_proj.shape}"
-        # print(f"Shape of output after projection: {out_proj.shape}")
         return out_proj  # Return the projected output
-        # return concat @ out_proj  # Project the concatenated output to the desired output dimension
     
 class SelfAttentionHead(torch.nn.Module):
-    def __init__(self, config, dim_in, dim_proj, dim_out): ### TODO: seperate dim_v, dim_qk
+    def __init__(self, config): ### TODO: seperate dim_v, dim_qk
         ### TODO: include batch size in assertions
         super().__init__()
         self.config = config
-        self.dim_in = dim_in
-        self.dim_proj = dim_proj
-        self.dim_out = dim_out  
-        self.W_v = torch.nn.Linear(dim_in, dim_proj) ### (49, Y) Y=Z
-        self.W_q = torch.nn.Linear(dim_in, dim_proj) ### (49, Z)
-        self.W_k = torch.nn.Linear(dim_in, dim_proj) ### (49, Z)
-        self.W_h = torch.nn.Linear(dim_proj, dim_out) ### (Y, 49)    
+        self.dim_in = self.config.dim_in  # Input dimension (e.g., 49 for MNIST patches)
+        self.dim_proj_V = self.config.dim_proj_V  # Projection dimension for value matrix (e.g., 49 for MNIST patches)
+        self.dim_proj_QK = self.config.dim_proj_QK  # Projection dimension for key and query matrices (e.g., 49 for MNIST patches)
+        self.dim_out = self.config.dim_out  # Output dimension (e.g., 49 for MNIST patches)  
+        self.num_patches = self.config.num_patches  # Number of patches (e.g., 16 for MNIST)
+        self.W_v = torch.nn.Linear(self.dim_in, self.dim_proj_V) ### (49, Y) Y=Z
+        self.W_q = torch.nn.Linear(self.dim_in, self.dim_proj_QK) ### (49, Z)
+        self.W_k = torch.nn.Linear(self.dim_in, self.dim_proj_QK) ### (49, Z)
+        self.W_h = torch.nn.Linear(self.dim_proj_V, self.dim_out) ### (Y, 49)    
     
-    def forward(self, embedding):
+    def forward(self, x):
         """
         Forward pass of the self-attention head.
         Args:
@@ -100,43 +94,29 @@ class SelfAttentionHead(torch.nn.Module):
             torch.Tensor: Output tensor of shape (batch_size, num_patches, dim_out)
         """
         # Compute queries, keys, and values
-        Q = self.W_q(embedding)
-        K = self.W_k(embedding)
-        V = self.W_v(embedding)
+        Q = self.W_q(x)
+        K = self.W_k(x)
+        V = self.W_v(x)
         ## Debugging shapes
-        # print(f"Embedding shape: {embedding.shape}")
-        # print(f"Q shape: {Q.shape}")
-        # print(f"K shape: {K.shape}")
-        # print(f"V shape: {V.shape}")
-        # assert K.shape == (16, self.dim_proj), f"Expected K shape (16, {self.dim_proj}), got {K.shape}"
-        # assert V.shape == (16, self.dim_proj), f"Expected V shape (16, {self.dim_proj}), got {V.shape}"
-        # assert Q.shape == (16, self.dim_proj), f"Expected Q shape (16, {self.dim_proj}), got {Q.shape}"
-
-
-        # Q = torch.matmul(embedding, self.W_q)
-        # K = torch.matmul(embedding, self.W_k)
-        # V = torch.matmul(embedding, self.W_v)
+        assert K.shape[-2:] == (self.num_patches, self.dim_proj_QK), f"Expected K shape (16, {self.dim_proj_QK}), got {K.shape}"
+        assert V.shape[-2:] == (self.num_patches, self.dim_proj_V), f"Expected V shape (16, {self.dim_proj_V}), got {V.shape}"
+        assert Q.shape[-2:] == (self.num_patches, self.dim_proj_QK), f"Expected Q shape (16, {self.dim_proj_QK}), got {Q.shape}"
 
         # Compute attention scores
-        A = Q @ K.transpose(-2, -1)  # (batch_size, num_patches, num_patches)
-        # debug shape
-        # print(f"A shape: {A.shape}")
-        # assert A.shape == (16, 16), f"Expected A shape (16, 16), got {A.shape}"
-        ### TODO: maybe remove the epsilon
-        eps = 1e-6  # Small epsilon to avoid division by zero
-        scale = np.sqrt(K.size(-1)) + eps
-        attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / scale
+        A = Q @ K.transpose(-2, -1) * (K.size(-1) ** -0.5) # (batch_size, num_patches, num_patches)
+        assert A.shape[-2:] == (self.num_patches, self.num_patches), f"Expected A shape ({self.num_patches}, {self.num_patches}), got {A.shape}"
+
         ### TODO: check if this is correct, we were trying to avoid nannvalues, maybe this isn't the best place to do this
-        attention_scores = torch.clamp(attention_scores, min=-30.0, max=30.0)  # Prevent softmax overflow
+        attention_scores = torch.clamp(A, min=-30.0, max=30.0)  # Prevent softmax overflow
         attention_weights = F.softmax(attention_scores, dim=-1)
 
         # Compute output
         attention_out = attention_weights @ V  # (batch_size, num_patches, dim_proj)
+        assert attention_out.shape[-2:] == (self.num_patches, self.dim_proj_V), f"Expected attention_out shape ({self.num_patches}, {self.dim_proj_V}), got {attention_out.shape}"
         
         # Linear projection for dimensionality
         output = self.W_h(attention_out)  # (batch_size, num_patches, dim_out)
-        # Debugging output shape
-        # print(f"Output shape: {output.shape}")
-        # assert output.shape == (16, 49), f"Expected output shape (16, 49), got {output.shape}"
+        assert output.shape[-2:] == (self.num_patches, self.dim_out), f"Expected output shape ({self.num_patches}, {self.dim_out}), got {output.shape}"
+        
 
         return output
