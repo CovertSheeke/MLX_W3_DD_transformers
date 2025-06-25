@@ -91,6 +91,11 @@ def main() -> None:
     model = TransformerEncoder(wandb.config).to(dev)
     optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
 
+    # Set up ckpt saving folder
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    CHECKPOINT_DIR = os.path.join(project_root, "checkpoints")
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
     # --- training & validation loop ---
     best_accuracy = 0.0
     for epoch in range(1, wandb.config.num_epochs + 1):
@@ -105,11 +110,17 @@ def main() -> None:
             ).to(dev)
             optimiser.zero_grad()
             loss, acc = model(img_embs, trgs)
+            # Save ckpt if acc is better than previous best
             if acc > best_accuracy:
-              best_accuracy = acc
-              # Save the model
-              torch.save(enc.state_dict(), f"mnist_transformer_best_{ts}.pth")
-#               print(f"New best accuracy: {best_accuracy}, model saved.")
+                best_accuracy = acc
+                torch.save(
+                    model.state_dict(),
+                    os.path.join(
+                        CHECKPOINT_DIR,
+                        f"mnist_transformer_best_{ts}.pth"
+                    )
+                )
+            # Continue into backprop
             loss.backward()
             optimiser.step()
             wandb.log({"train_loss": loss.item(), "train_acc": acc, "epoch": epoch})
@@ -121,7 +132,13 @@ def main() -> None:
         wandb.log({"val_loss": val_loss, "val_acc": val_acc, "epoch": epoch})
         print(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}")
         # Save the model
-        torch.save(enc.state_dict(), f"mnist_transformer_epoch_{epoch + 1}_{ts}.pth")
+        torch.save(
+            model.state_dict(),
+            os.path.join(
+                CHECKPOINT_DIR,
+                f"mnist_transformer_epoch_{epoch + 1}_{ts}.pth"
+            )
+        )
 
     wandb.finish()
     print("Training complete.")
