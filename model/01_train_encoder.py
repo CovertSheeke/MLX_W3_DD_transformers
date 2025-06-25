@@ -29,7 +29,7 @@ wandb.init(
     config={
         "learning_rate": 0.0001,
         "batch_size": 1024,
-        "num_epochs": 2,
+        "num_epochs": 100,
         "num_heads": 8,
         "num_encoders": 8,
         "num_patches": 16,  # Assuming a fixed number of patches, e.g., 16 for MNIST

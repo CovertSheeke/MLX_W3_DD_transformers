@@ -6,7 +6,7 @@ import numpy as np
 from patch_and_embed import image_to_patch_columns
 
 # Function to get 2D sinusoidal positional encodings
-#TODO: if we change patch count (including adding a CLS token) this will break
+#TODO: NO longer used, we used learned positional encodings instead. Could remove.
 def get_2d_sincos_pos_enc(grid_h: int, grid_w: int, d_model: int) -> torch.Tensor:
     """
     Return a [grid_h*grid_w, d_model] tensor of fixed 2D sinusoidal positional encodings.
@@ -69,11 +69,12 @@ class TransformerEncoder(torch.nn.Module):
         # 1) Patch projection: map raw 49-D pixels → dim_embed (currently also 49)
         self.patch_proj = nn.Linear(dim_in, dim_embed)
 
-        # 2) Fixed 2D sinusoidal positional encoding for a 4×4 grid
-        #  Compute once, register as buffer so it’s moved with model but not learned.
-        # TODO: un-hard code the grid dims
-        pos_enc = get_2d_sincos_pos_enc(grid_h=4, grid_w=4, d_model=dim_embed)  # [16, dim_embed]
-        self.register_buffer("pos_encoding", pos_enc.unsqueeze(0))  # shape [1,16,dim_embed]
+        # 2) Add pos embedding
+        # option a: Fixed 2D sinusoidal positional encoding for a 4×4 grid
+        #pos_enc = get_2d_sincos_pos_enc(grid_h=4, grid_w=4, d_model=dim_embed)  # [16, dim_embed]
+        # option b: learnable positional encoding, randomly initialised
+        self.pos_encoding = nn.Parameter(torch.zeros(1, 16, dim_embed)) #TODO:: add one for CLS token
+        torch.nn.init.trunc_normal_(self.pos_encoding, std=0.02)
 
         # 3) Stack of encoding blocks, now expecting dim_embed in/out
         self.encoding_blocks = torch.nn.ModuleList([
@@ -97,8 +98,11 @@ class TransformerEncoder(torch.nn.Module):
         Returns:
         Cross-entropy loss.
         """
-
+        # project raw patches into embed-space, then add learned pos-enc
+        x = self.patch_proj(x)                          # (B, P, dim_embed)
+        x = x + self.pos_encoding[:, :x.size(1), :]     # (B, P, dim_embed)
         x_n = x
+
         for encoding_block in self.encoding_blocks:
             x_n = encoding_block(x_n) # B, num_patches, dim_proj_V
             assert x_n.shape[-2:] == (self.config.num_patches, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
