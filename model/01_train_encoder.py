@@ -98,6 +98,7 @@ def main() -> None:
 
     # --- training & validation loop ---
     best_accuracy = 0.0
+    best_ckpt_filename = ""
     for epoch in range(1, wandb.config.num_epochs + 1):
         model.train()
         loop = tqdm.tqdm(train_loader, desc=f"Epoch {epoch}/{wandb.config.num_epochs}")
@@ -112,12 +113,16 @@ def main() -> None:
             loss, acc = model(img_embs, trgs)
             # Save ckpt if acc is better than previous best
             if acc > best_accuracy:
+                # Delete previous best ckpt if it exists
+                if best_ckpt_filename:
+                    os.remove(os.path.join(CHECKPOINT_DIR, best_ckpt_filename))
+                best_ckpt_filename = f"mnist_transformer_best_{epoch}_{ts}.pth"
                 best_accuracy = acc
                 torch.save(
                     model.state_dict(),
                     os.path.join(
                         CHECKPOINT_DIR,
-                        f"mnist_transformer_best_{ts}.pth"
+                        best_ckpt_filename
                     )
                 )
             # Continue into backprop
@@ -131,14 +136,14 @@ def main() -> None:
         val_loss, val_acc = evaluate(model, val_loader, dev)
         wandb.log({"val_loss": val_loss, "val_acc": val_acc, "epoch": epoch})
         print(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}")
-        # Save the model
-        torch.save(
-            model.state_dict(),
-            os.path.join(
-                CHECKPOINT_DIR,
-                f"mnist_transformer_epoch_{epoch + 1}_{ts}.pth"
-            )
+    # Save the model
+    torch.save(
+        model.state_dict(),
+        os.path.join(
+            CHECKPOINT_DIR,
+            f"mnist_transformer_final_epoch_{ts}.pth"
         )
+    )
 
     wandb.finish()
     print("Training complete.")
