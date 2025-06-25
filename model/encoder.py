@@ -118,7 +118,6 @@ class EncodingBlock(torch.nn.Module):
             SelfAttentionHead(self.config) for _ in range(self.config.num_heads)
         ])
 
-
         # TODO add the project, layer norm and feedforward to diagram
         # Linear projection after concatenation of attention heads
         self.W_out_proj = torch.nn.Linear(self.config.num_heads*self.config.dim_out, self.config.dim_out)  
@@ -128,7 +127,8 @@ class EncodingBlock(torch.nn.Module):
         # feedforward: typically expands then back
         self.ffn = nn.Sequential(
             nn.Linear(self.config.dim_out, self.config.dim_out * 4),
-            nn.GELU(),
+            nn.ReLU(),
+            nn.Dropout(p=0.1), 
             nn.Linear(self.config.dim_out * 4, self.config.dim_out)
         )
 
@@ -140,10 +140,10 @@ class EncodingBlock(torch.nn.Module):
 
         assert concat.shape[-2:] == (self.config.num_patches, (self.config.num_heads * self.config.dim_out)), f"Expected concatenated output shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.num_heads * self.config.dim_out}), got {concat.shape}"
         ### linear projection of the concatenated output
-        out_proj = torch.matmul(concat, self.W_out_proj.weight.t())  # Equivalent to self.W_out_proj(concat) without bias
+        out_proj = self.W_out_proj(concat)
         assert out_proj.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected output projection shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {out_proj.shape}"
 
-        # 
+        # Add residual connection and layer normalization after the attention heads
         norm_emb = self.layernorm1(x + out_proj)
         # feed forward
         ffn_out = self.ffn(norm_emb)
@@ -166,6 +166,7 @@ class SelfAttentionHead(torch.nn.Module):
         self.W_q = torch.nn.Linear(self.dim_in, self.dim_proj_QK) ### (49, Z)
         self.W_k = torch.nn.Linear(self.dim_in, self.dim_proj_QK) ### (49, Z)
         self.W_h = torch.nn.Linear(self.dim_proj_V, self.dim_out) ### (Y, 49)    
+        self.dropout = torch.nn.Dropout(p=0.1)  # Dropout layer for regularization
 
     
     def forward(self, x):
@@ -197,6 +198,8 @@ class SelfAttentionHead(torch.nn.Module):
         # “from-patch” axis (last dim) – the classic “where should I look?” question.
         attn_weights: torch.Tensor = F.softmax(attn_scores, dim=-1)  # [B, P, P]
 
+        # Add the dropout
+        attn_weights = self.dropout(attn_weights)  # [B, P, P]
         # Each output patch is now a weighted average of the value vectors, with the
         # weights decided by its query–key similarity.
         attn_out: torch.Tensor = attn_weights @ V     # [B, P, dim_proj]
