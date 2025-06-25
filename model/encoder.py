@@ -60,26 +60,43 @@ class TransformerEncoder(torch.nn.Module):
         # load config, config includes all hyperparameters of the run ie dimensions, batch size, number of patches, etc.
         self.config = config
 
-        # 1) Patch projection: map raw 49-D pixels → dim_embed (currently also 49)
-        self.patch_proj = nn.Linear(self.config.dim_patch, self.config.dim_in)
+        # 1) patch → embed
+        self.patch_proj = nn.Linear(config.dim_patch, config.dim_in)
 
-        # 2) Fixed 2D sinusoidal positional encoding for a 4×4 grid
-        #  Compute once, register as buffer so it’s moved with model but not learned.
-        # TODO: un-hard code the grid dims
-        self.pos_encoding = nn.Parameter(torch.zeros(1, 16, self.config.dim_in)) #TODO:: add one for CLS token
+        # 2) learnable CLS token + pos-encoding for P patches + 1 CLS
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, config.dim_in))
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+        # Create a learnable positional encoding and add 1 dim for the cls token
+        self.pos_encoding = nn.Parameter(
+            torch.zeros(1, config.num_patches + 1, config.dim_in)
+        )
         nn.init.trunc_normal_(self.pos_encoding, std=0.02)
 
-        # 3) Stack of encoding blocks, now expecting dim_embed in/out
-        self.encoding_blocks = torch.nn.ModuleList([
-            EncodingBlock(self.config)
-            for _ in range(self.config.num_encoders)
+        # 3) transformer blocks
+        self.encoding_blocks = nn.ModuleList([
+            EncodingBlock(config) for _ in range(config.num_encoders)
         ])
 
-        # 4) Initialise the MLPs
-        self.cls_head = MLP(input_dim=self.config.dim_in, hidden_dim=self.config.mlp_hidden_dim, output_dim=10)  # MLP for classification
-        self.mlp_between_blocks = MLP(input_dim=self.config.dim_out, hidden_dim=self.config.mlp_hidden_dim, output_dim=self.config.dim_in)  # MLP to apply between encoding blocks        # self.cls_head = nn.Linear(dim_out, 10)  # Classifier head for final output #TODO: add the cls token in
-      
-    def forward(self, x, trg):
+        # 4) heads
+        # MLP between blocks still uses dim_out→dim_in
+        self.mlp_between_blocks = MLP(
+            input_dim=config.dim_out,
+            hidden_dim=config.mlp_hidden_dim,
+            output_dim=config.dim_in,
+        )
+        # final CLS-head
+        self.cls_head = MLP(
+            input_dim=config.dim_out,
+            hidden_dim=config.mlp_hidden_dim,
+            output_dim=10,
+        )
+
+        # 5) dropout and normalization for final output
+        self.final_norm = nn.LayerNorm(config.dim_out)
+        self.final_dropout = nn.Dropout(p=0.1)
+
+    def forward(self, x_n, trg):
         """
         Args:
         embedding: [batch, num_patches, dim_in] raw patch pixels.
@@ -88,19 +105,31 @@ class TransformerEncoder(torch.nn.Module):
         Cross-entropy loss.
         """
         # project raw patches into embed-space, then add learned pos-enc
-        x = self.patch_proj(x)                          # (B, P, dim_embed)
-        x = x + self.pos_encoding[:, :x.size(1), :]     # (B, P, dim_embed)
-        x_n = x
+        bsz = x_n.size(0)
+        # project patches
+        x_n = self.patch_proj(x_n)                                # → (B, P, dim_in)
+        # prepended CLS
+        cls = self.cls_token.expand(bsz, -1, -1)              # → (B, 1, dim_in)
+        x_n = torch.cat((cls, x_n), dim=1)                        # → (B, P+1, dim_in)
+        # add pos encoding
+        x_n = x_n + self.pos_encoding[:, : x_n.size(1), :]          # still (B, P+1, dim_in)
 
+        # Loop through encoding blocks
         for encoding_block in self.encoding_blocks:
             x_n = encoding_block(x_n) # B, num_patches, dim_proj_V
-            assert x_n.shape[-2:] == (self.config.num_patches, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
+            assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
             x_n = self.mlp_between_blocks(x_n) # B, num_patches, dim_out
-            assert x_n.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected x_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {x_n.shape}"
-
-        pooled = x_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
-        assert pooled.shape[-1:] == torch.Size([self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
-        predictions = self.cls_head(pooled)  # Assuming self.mlp is defined in the class
+            assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_out), f"Expected x_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {x_n.shape}"
+        ## Old way, use avg pooling over the num_patches dimension
+        #pooled = x_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
+        #assert pooled.shape[-1:] == torch.Size([self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
+        # New way, use CLS token as pooled representation also add dropout and norm
+        cls_out = x_n[:, 0, :] 
+        # Add dropout and normalization
+        cls_out = self.final_norm(cls_out)
+        cls_out = self.final_dropout(cls_out)
+        # Use CLS token for classification. cls_head will reshape to (B, 10) for 10 classes.
+        predictions = self.cls_head(cls_out)  # Assuming self.mlp is defined in the class
         assert predictions.shape[-1:] == torch.Size([10]), f"Expected predictions shape ({self.config.batch_size}, 10), got {predictions.shape}"
         
         pred_classes = predictions.argmax(dim=1)
@@ -138,10 +167,10 @@ class EncodingBlock(torch.nn.Module):
         ### concat all the outputs of the attention heads
         concat = torch.cat(head_outputs, dim=-1)  # Concatenate outputs of all attention heads along the feature dimension
 
-        assert concat.shape[-2:] == (self.config.num_patches, (self.config.num_heads * self.config.dim_out)), f"Expected concatenated output shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.num_heads * self.config.dim_out}), got {concat.shape}"
+        assert concat.shape[-2:] == (self.config.num_patches +1, (self.config.num_heads * self.config.dim_out)), f"Expected concatenated output shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.num_heads * self.config.dim_out}), got {concat.shape}"
         ### linear projection of the concatenated output
         out_proj = self.W_out_proj(concat)
-        assert out_proj.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected output projection shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {out_proj.shape}"
+        assert out_proj.shape[-2:] == (self.config.num_patches +1, self.config.dim_out), f"Expected output projection shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {out_proj.shape}"
 
         # Add residual connection and layer normalization after the attention heads
         norm_emb = self.layernorm1(x + out_proj)
@@ -182,10 +211,9 @@ class SelfAttentionHead(torch.nn.Module):
         K = self.W_k(x)
         V = self.W_v(x)
         ## Debugging shapes
-
-        assert K.shape[-2:] == (self.num_patches, self.dim_proj_QK), f"Expected K shape (16, {self.dim_proj_QK}), got {K.shape}"
-        assert V.shape[-2:] == (self.num_patches, self.dim_proj_V), f"Expected V shape (16, {self.dim_proj_V}), got {V.shape}"
-        assert Q.shape[-2:] == (self.num_patches, self.dim_proj_QK), f"Expected Q shape (16, {self.dim_proj_QK}), got {Q.shape}"
+        # assert K.shape[-2:] == (self.num_patches, self.dim_proj_QK), f"Expected K shape (16, {self.dim_proj_QK}), got {K.shape}"
+        # assert V.shape[-2:] == (self.num_patches, self.dim_proj_V), f"Expected V shape (16, {self.dim_proj_V}), got {V.shape}"
+        # assert Q.shape[-2:] == (self.num_patches, self.dim_proj_QK), f"Expected Q shape (16, {self.dim_proj_QK}), got {Q.shape}"
 
         ### Scaled dot-product attention
         # Each query row i is dotted with every key row j → a score telling us
