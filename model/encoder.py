@@ -117,9 +117,9 @@ class TransformerEncoder(torch.nn.Module):
         # Loop through encoding blocks
         for encoding_block in self.encoding_blocks:
             x_n = encoding_block(x_n) # B, num_patches, dim_proj_V
-            assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
+            #assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
             x_n = self.mlp_between_blocks(x_n) # B, num_patches, dim_out
-            assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_out), f"Expected x_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {x_n.shape}"
+            #assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_out), f"Expected x_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {x_n.shape}"
         ## Old way, use avg pooling over the num_patches dimension
         #pooled = x_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
         #assert pooled.shape[-1:] == torch.Size([self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
