@@ -66,8 +66,8 @@ class TransformerEncoder(torch.nn.Module):
         # 2) Fixed 2D sinusoidal positional encoding for a 4×4 grid
         #  Compute once, register as buffer so it’s moved with model but not learned.
         # TODO: un-hard code the grid dims
-        pos_enc = get_2d_sincos_pos_enc(grid_h=4, grid_w=4, d_model=self.config.dim_in)  # [16, dim_embed]
-        self.register_buffer("pos_encoding", pos_enc.unsqueeze(0))  # shape [1,16,dim_embed]
+        self.pos_encoding = nn.Parameter(torch.zeros(1, 16, self.config.dim_in)) #TODO:: add one for CLS token
+        nn.init.trunc_normal_(self.pos_encoding, std=0.02)
 
         # 3) Stack of encoding blocks, now expecting dim_embed in/out
         self.encoding_blocks = torch.nn.ModuleList([
