@@ -51,7 +51,8 @@ def main() -> None:
         project="mlx_wk3_mnist_transformer",
         name=f"mnist_transformer_{ts}",
         config={
-            "learning_rate": 1e-4,
+            "init_learning_rate": 1e-4,
+            "min_learning_rate": 1e-6,
             "batch_size": 1024,
             "num_epochs": 100,
             "num_heads": 8,
@@ -60,8 +61,8 @@ def main() -> None:
             "patch_size": 7,
             "stride": 7,
             "dim_patch": 49,
-            "dim_proj_V": 49,
-            "dim_proj_QK": 49,
+            "dim_proj_V": 25,
+            "dim_proj_QK": 100,
             "dim_out": 49,
             "dim_in": 49,
             "mlp_hidden_dim": 25,
@@ -89,7 +90,15 @@ def main() -> None:
 
     # --- model, optimiser ---
     model = TransformerEncoder(wandb.config).to(dev)
-    optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.learning_rate)
+    optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.init_learning_rate)
+    # Set up a scheduler to linearly decay the learning rate from initial to a minimum value
+    min_lr = wandb.config.min_learning_rate  # You can adjust this minimum learning rate as needed
+    scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimiser,
+        start_factor=1.0,
+        end_factor=min_lr / wandb.config.init_learning_rate,
+        total_iters=wandb.config.num_epochs,
+    )
 
     # Set up ckpt saving folder
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -134,8 +143,13 @@ def main() -> None:
         
         # end of epoch → validation
         val_loss, val_acc = evaluate(model, val_loader, dev)
-        wandb.log({"val_loss": val_loss, "val_acc": val_acc, "epoch": epoch})
-        print(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}")
+        
+        # Step the scheduler to update learning rate
+        scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+        
+        wandb.log({"val_loss": val_loss, "val_acc": val_acc, "learning_rate": current_lr, "epoch": epoch})
+        print(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}, lr={current_lr:.6f}")
     # Save the model
     torch.save(
         model.state_dict(),
