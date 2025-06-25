@@ -40,34 +40,38 @@ def evaluate(
     avg_acc = total_acc / total_samples
     return avg_loss, avg_acc
 
-def main() -> None:
+def train() -> None:
+    """Training function that can be called by wandb agent or directly."""
     # --- setup seed, timestamp, device, W&B ---
     torch.manual_seed(42)
     ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", dev)
-    wandb.init(
-        entity=os.environ.get("WANDB_ENTITY"),
-        project="mlx_wk3_mnist_transformer",
-        name=f"mnist_transformer_{ts}",
-        config={
-            "init_learning_rate": 1e-4,
-            "min_learning_rate": 1e-6,
-            "batch_size": 1024,
-            "num_epochs": 100,
-            "num_heads": 8,
-            "num_encoders": 8,
-            "num_patches": 16,
-            "patch_size": 7,
-            "stride": 7,
-            "dim_patch": 49,
-            "dim_proj_V": 25,
-            "dim_proj_QK": 100,
-            "dim_out": 49,
-            "dim_in": 49,
-            "mlp_hidden_dim": 25,
-        },
-    )
+    
+    # wandb.init() will be called by the agent in sweep mode, or we call it here for single runs
+    if not wandb.run:
+        wandb.init(
+            entity=os.environ.get("WANDB_ENTITY"),
+            project="mlx_wk3_mnist_transformer",
+            name=f"mnist_transformer_{ts}",
+            config={
+                "init_learning_rate": 1e-4,
+                "min_learning_rate": 1e-6,
+                "batch_size": 1024,
+                "num_epochs": 100,
+                "num_heads": 8,
+                "num_encoders": 8,
+                "num_patches": 16,
+                "patch_size": 7,
+                "stride": 7,
+                "dim_patch": 49,
+                "dim_proj_V": 25,
+                "dim_proj_QK": 100,
+                "dim_out": 49,
+                "dim_in": 49,
+                "mlp_hidden_dim": 25,
+            },
+        )
 
     # --- load and normalise data ---
     data_path = os.path.join(os.path.dirname(__file__), "..", "data", "mnist_trainset.pkl")
@@ -161,6 +165,69 @@ def main() -> None:
 
     wandb.finish()
     print("Training complete.")
+
+def run_sweep():
+    """Run a wandb sweep to test different num_heads and num_encoders."""
+    sweep_config = {
+        'method': 'grid',
+        'name': 'mnist_transformer_sweep',
+        'metric': {
+            'goal': 'maximize',
+            'name': 'val_acc'
+        },
+        'parameters': {
+            'num_heads': {
+                'values': [4, 8, 16]
+            },
+            'num_encoders': {
+                'values': [4, 6, 8, 12]
+            },
+            # Fixed parameters
+            'init_learning_rate': {'value': 1e-4},
+            'min_learning_rate': {'value': 1e-6},
+            'batch_size': {'value': 1024},
+            'num_epochs': {'value': 30},  # Reduced for faster sweep
+            'num_patches': {'value': 16},
+            'patch_size': {'value': 7},
+            'stride': {'value': 7},
+            'dim_patch': {'value': 49},
+            'dim_proj_V': {'value': 25},
+            'dim_proj_QK': {'value': 100},
+            'dim_out': {'value': 49},
+            'dim_in': {'value': 49},
+            'mlp_hidden_dim': {'value': 25},
+        },
+        'early_terminate': {
+            'type': 'hyperband',
+            'min_iter': 5,
+            'max_iter': 30,
+            's': 2,
+            'eta': 3
+        }
+    }
+    
+    # Initialize the sweep
+    sweep_id = wandb.sweep(
+        sweep_config, 
+        project="mlx_wk3_mnist_transformer",
+        entity=os.environ.get("WANDB_ENTITY")
+    )
+    
+    print(f"Starting sweep with ID: {sweep_id}")
+    print("You can also run additional agents with:")
+    print(f"wandb agent {os.environ.get('WANDB_ENTITY', 'your-entity')}/mlx_wk3_mnist_transformer/{sweep_id}")
+    
+    # Run the sweep agent
+    wandb.agent(sweep_id, train, count=12)  # 3x4 = 12 combinations for grid search
+
+def main():
+    """Main function to choose between single run or sweep."""
+    import sys
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "--sweep":
+        run_sweep()
+    else:
+        train()
 
 if __name__ == "__main__":
     main()
