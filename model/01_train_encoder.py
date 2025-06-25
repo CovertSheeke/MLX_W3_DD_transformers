@@ -66,6 +66,7 @@ dl = torch.utils.data.DataLoader(
 opt = torch.optim.Adam(enc.parameters(), lr=wandb.config.learning_rate)
 
 # Define the training loop
+best_accuracy = 0.0
 print("Starting training...")
 for epoch in range(wandb.config.num_epochs):
     prgs = tqdm.tqdm(dl, desc=f"Epoch {epoch+1}/{wandb.config.num_epochs}")
@@ -77,14 +78,20 @@ for epoch in range(wandb.config.num_epochs):
         # print(f"Image embeddings shape: {img_embs.shape}, Targets shape: {trgs.shape}")
         opt.zero_grad()
         loss, accuracy = enc(img_embs, trgs)
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            # Save the model
+            torch.save(enc.state_dict(), f"mnist_transformer_best_{ts}.pth")
+            print(f"New best accuracy: {best_accuracy}, model saved.")
         loss.backward()
         opt.step()
         wandb.log({"loss": loss.item(), "accuracy": accuracy, "epoch": epoch + 1, "batch": idx + 1})
-        # print("MADE IT HERE")
+        
         if idx % 100 == 0:
             prgs.set_postfix({"loss": loss.item()})
             print(f"Epoch {epoch + 1}, Batch {idx + 1}, Loss: {loss.item()}")
-
+    # Save the model
+    torch.save(enc.state_dict(), f"mnist_transformer_epoch_{epoch + 1}_{ts}.pth")
 
 wandb.finish()
 print("Training complete. Model saved and logged to WandB.")
