@@ -51,6 +51,7 @@ def image_to_patch_columns(images, patch_size=7, stride=7):
         columns = patches.contiguous().view(-1, patch_size * patch_size)
         batch_columns.append(columns)
     return torch.stack(batch_columns)
+
 ## FOR LOOP IMPLEMENTATION OF PATCHING'
 # patches = []
 # for i in range(0, 28, 7):

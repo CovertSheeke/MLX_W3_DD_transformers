@@ -23,6 +23,7 @@ print("Using device:", dev)
 
 ## initialize WandB for logging
 wandb.init(
+    entity=os.environ.get("WANDB_ENTITY"),
     project="mlx_wk3_mnist_transformer",
     name=f"mnist_transformer_{ts}",
     config={
@@ -66,24 +67,21 @@ for epoch in range(wandb.config.num_epochs):
     prgs = tqdm.tqdm(dl, desc=f"Epoch {epoch+1}/{wandb.config.num_epochs}")
     for idx, (imgs, trgs) in enumerate(prgs):
         imgs, trgs = imgs.to(dev), trgs.to(dev)
+        # print("imgs shape: ", imgs.shape, "trgs shape: ", trgs.shape)
         img_embs = patch_and_embed.image_to_patch_columns(imgs, patch_size=wandb.config.patch_size, stride=wandb.config.stride)
         img_embs = img_embs.to(dev)
         # print(f"Image embeddings shape: {img_embs.shape}, Targets shape: {trgs.shape}")
         opt.zero_grad()
-        loss = enc(img_embs, trgs)
+        loss, accuracy = enc(img_embs, trgs)
         loss.backward()
         opt.step()
-        wandb.log({"loss": loss.item(), "epoch": epoch + 1, "batch": idx + 1})
+        wandb.log({"loss": loss.item(), "accuracy": accuracy, "epoch": epoch + 1, "batch": idx + 1})
         # print("MADE IT HERE")
         if idx % 100 == 0:
             prgs.set_postfix({"loss": loss.item()})
             print(f"Epoch {epoch + 1}, Batch {idx + 1}, Loss: {loss.item()}")
 
-# Save the model   
-model_path = os.path.join(os.path.dirname(__file__), '..', 'models', f'mnist_transformer_{ts}.pt')
-torch.save(enc.state_dict(), model_path)
-print(f"Model saved to {model_path}")
-        
+
 
 wandb.finish()
 print("Training complete. Model saved and logged to WandB.")

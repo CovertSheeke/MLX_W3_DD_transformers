@@ -11,7 +11,7 @@ class MLP(nn.Module):
         self.fc2 = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, x):
-        x = F.relu(self.fc1(x))
+        x = self.fc1(x)
         x = self.fc2(x)
         return x
 
@@ -34,9 +34,9 @@ class TransformerEncoder(torch.nn.Module):
         
         # # --- Test case: perfect predictions (one-hot at correct class) ---
         # perfect_logits = torch.zeros(batch_size, num_classes)
-        # perfect_logits[torch.arange(batch_size), random_targets] = 1.0  # Set correct class to 1
+        # perfect_logits[torch.arange(batch_size), random_targets] = 100.0  # Set correct class to 1
         # perfect_loss = F.cross_entropy(perfect_logits, random_targets)
-        # print("Perfect logits:\n", perfect_logits)
+        # # print("Perfect logits:\n", perfect_logits)
         # # Print perfect logits and random targets side by side for comparison
         # for i in range(batch_size):
         #     print(f"Perfect logits[{i}]: {perfect_logits[i].tolist()} | Random target: {random_targets[i].item()}")
@@ -52,28 +52,32 @@ class TransformerEncoder(torch.nn.Module):
         self.mlp_between_blocks = MLP(input_dim=49, hidden_dim=49, output_dim=49)  # MLP to apply between encoding blocks
       
     def forward(self, embedding, target_labels):
-        
-        assert target_labels.shape == torch.Size([self.config.batch_size]), f"Expected target_labels shape ({self.config.batch_size}), got {target_labels.shape}"
         embedding_n = embedding
         for encoding_block in self.encoding_blocks:
             embedding_n = encoding_block(embedding_n) # B, num_patches, dim_proj_V
-            assert embedding_n.shape == (self.config.batch_size, self.config.num_patches, self.config.dim_proj_V), f"Expected embedding_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {embedding_n.shape}"
+            assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_proj_V), f"Expected embedding_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {embedding_n.shape}"
             embedding_n = self.mlp_between_blocks(embedding_n) # B, num_patches, dim_out
-            assert embedding_n.shape == (self.config.batch_size, self.config.num_patches, self.config.dim_out), f"Expected embedding_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {embedding_n.shape}"
+            assert embedding_n.shape[-2:] == (self.config.num_patches, self.config.dim_out), f"Expected embedding_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {embedding_n.shape}"
 
         pooled = embedding_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
-        assert pooled.shape == torch.Size([self.config.batch_size, self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
+        assert pooled.shape[-1:] == torch.Size([self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
         predictions = self.cls_head(pooled)  # Assuming self.mlp is defined in the class
-        assert predictions.shape == torch.Size([self.config.batch_size, 10]), f"Expected predictions shape ({self.config.batch_size}, 10), got {predictions.shape}"
-        ### TODO: apply normalisation to prediction (softmax?)
+        assert predictions.shape[-1:] == torch.Size([10]), f"Expected predictions shape ({self.config.batch_size}, 10), got {predictions.shape}"
+        
+        pred_classes = predictions.argmax(dim=1)
+        correct = (pred_classes == target_labels).float().sum()
+        accuracy = correct / predictions.shape[0]
+        # print(f"Batch accuracy: {accuracy.item():.4f}")
+
 
         # predictions = self.cls_head(embedding_n)  # Classifier head for final output
         # print(f"Predictions shape: {predictions.shape}")
-        # Average pool over the 16 (num_patches) dimension to get shape (batch_size, dim_out)
+        # # Average pool over the 16 (num_patches) dimension to get shape (batch_size, dim_out)
         # print(f"Pooled predictions shape: {pooled.shape}")
+        
 
         # Compute cross-entropy loss
-        return F.cross_entropy(predictions, target_labels)
+        return F.cross_entropy(predictions, target_labels), accuracy
         
 
 
