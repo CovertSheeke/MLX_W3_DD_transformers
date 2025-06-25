@@ -35,14 +35,12 @@ wandb.init(
         "num_patches": 16,  # Assuming a fixed number of patches, e.g., 16 for MNIST
         "patch_size": 7,
         "stride": 7,
-        "dim_in": 49,  # Assuming each patch is flattened to a vector of size 49 (7x7)
+        "dim_patch": 49,  # Assuming each patch is flattened to a vector of size 49 (7x7)
         "dim_proj_V": 49,  # Projection dimension for value matrix, can be same as dim_in
         "dim_proj_QK": 49,  # Projection dimension for key&query matrices, can be same as dim_in
-        "dim_out": 49,  # Output dimension, must be same as dim_in
+        "dim_out": 49,
+        "dim_in": 49,  # Output dimension, must be same as dim_in
         "mlp_hidden_dim": 25,  # Hidden dimension for MLP
-        "mlp_output_dim": 10,  # Output dimension for MLP (number of classes)
-        "mlp_between_blocks_hidden_dim": 49,  # Hidden dimension for MLP between blocks
-        "mlp_between_blocks_output_dim": 49,  # Output
     }
 )
 
