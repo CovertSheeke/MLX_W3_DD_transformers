@@ -59,7 +59,7 @@ class TransformerEncoder(torch.nn.Module):
         self.final_norm = nn.LayerNorm(config.dim_out)
         self.final_dropout = nn.Dropout(p=0.1)
 
-    def forward(self, x_n, trg):
+    def forward(self, x_n):
         """
         Args:
         embedding: [batch, num_patches, dim_in] raw patch pixels.

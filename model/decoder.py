@@ -61,9 +61,11 @@ class TransformerDecoder(nn.Module):
             logits: (B, T, vocab_size)
             - predicted logits for the next token at each position
         """
-        B, T = tokens.shape  # B: batch size, T: token sequence length
+        # B,
+        T = tokens.shape  # B: batch size, T: token sequence length
         # 1. Embed tokens and add positional embeddings
-        position_ids = torch.arange(T, device=tokens.device)
+        # print('tokens', tokens.shape)  # (B, T)
+        position_ids = torch.arange(2, device=tokens.device)
         pos = self.pos_emb(position_ids).unsqueeze(0)   # → (1, T, D)
         x_n = self.token_emb(tokens) + pos              # broadcasts to (B, T, D)
 

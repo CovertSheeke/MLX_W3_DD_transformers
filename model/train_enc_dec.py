@@ -15,7 +15,21 @@ from torch.utils.data import random_split, DataLoader, TensorDataset
 
 
 #TODO: add eval 
-
+TOKEN2IDX = {
+  "0": 0,
+  "1": 1,
+  "2": 2,
+  "3": 3,
+  "4": 4,
+  "5": 5,
+  "6": 6,
+  "7": 7,
+  "8": 8,
+  "9": 9,
+  "<pad>": 10,
+  "<start>": 11,
+  "<stop>": 12,
+}
 
 def train() -> None:
     """Training function that can be called by wandb agent or directly."""
@@ -30,7 +44,7 @@ def train() -> None:
         wandb.init(
             entity=os.environ.get("WANDB_ENTITY"),
             project="mlx_wk3_mnist_transformer",
-            name=f"mnist_transformer_{ts}",
+            name=f"mnist_transformer_enc_and_dec_{ts}",
             config={
                 "init_learning_rate": 1e-4,
                 "min_learning_rate": 1e-6,
@@ -49,16 +63,115 @@ def train() -> None:
                 "mlp_hidden_dim": 25,
                 # decoder stuff below
                 "max_seq_len": 10,  # Maximum sequence length for decoder input
-                "dec_dim_in": 64,
-                "dec_dim_out":64,
+                "dec_dim_in": 49,
+                "dec_dim_out":49,
                 "num_decoders": 6,
                 "dec_mask_num_heads": 8,
-                "dec_cross_num_heads": 32,
-
-
-
+                "dec_cross_num_heads": 8,
             },
         )
+
+    # load dataset
+    data_path = os.path.join(os.path.dirname(__file__), "..", "data", "mnist_trainset.pkl")
+    with open(os.path.abspath(data_path), "rb") as f:
+        fullset = pickle.load(f)
+    ds = fullset.data.float().div(255.0)
+    ds = ds.sub_(0.1307).div_(0.3081)  # MNIST normalisation
+    targets = fullset.targets
+
+    train_ds = TensorDataset(ds, targets)
+
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=wandb.config.batch_size,
+        shuffle=True)
+    
+
+    
+    # model, optimiser, cross entropy loss, and scheduler
+    model = Transformer(wandb.config).to(dev)
+    optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.init_learning_rate)
+    min_lr = wandb.config.min_learning_rate  # You can adjust this minimum learning rate as needed
+    scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimiser,
+        start_factor=1.0,
+        end_factor=min_lr / wandb.config.init_learning_rate,
+        total_iters=wandb.config.num_epochs,
+    )
+    cel = nn.CrossEntropyLoss()
+
+    # Set up ckpt saving folder
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    CHECKPOINT_DIR = os.path.join(project_root, "checkpoints", f"enc_and_dec")
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
+    # --- training loop ---
+    for epoch in range(wandb.config.num_epochs):
+        model.train()
+        loop = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{wandb.config.num_epochs},", leave=False)
+        for images, labels in loop:
+            imgs, lbls = images.to(dev), labels.to(dev)
+            start_token = torch.full((lbls.size(0), 1), TOKEN2IDX["<start>"], device=dev)
+            # print('start token', start_token.shape)
+            # print('lbls', lbls.shape)
+            # Add dimension to lbls to make it [batch_size, 1] for concatenation
+            lbls_expanded = lbls.unsqueeze(1)  # Convert from [1024] to [1024, 1]
+            lbls = torch.cat([start_token, lbls_expanded], dim=1)  # Add start token to labels
+            # print('labels', labels)
+            img_embs = image_to_patch_columns(
+                imgs,
+                patch_size=wandb.config.patch_size,
+                stride=wandb.config.stride,
+            ).to(dev)
+
+            optimiser.zero_grad()
+            output = model(img_embs, lbls)
+            
+            # Create target labels by shifting left and adding stop token
+            # labels[:, 1:] removes the start token from each sequence (keeping original lbls)
+            # Then we add the stop token at the end of each sequence
+            batch_size = lbls.size(0)
+            stop_token = torch.full((batch_size, 1), TOKEN2IDX["<stop>"], device=dev)
+            targets = torch.cat([lbls[:, 1:], stop_token], dim=1)  # Use labels (with start token) instead of lbls
+            
+            # Adjust logits to match target sequence length
+            logits = output[:, :targets.size(1), :]  # Take only as many predictions as we have targets
+            logits = logits.reshape(-1, logits.size(-1))  # Reshape for loss calculation
+            targets = targets.reshape(-1)  # Reshape for loss calculation
+            # print("input labels (with start token):", lbls[0])
+            # print("targets (shifted with stop token):", targets[0])
+            loss = cel(logits, targets)  # Calculate cross-entropy loss
+            # acc = ### calculate accuracy here
+            loss.backward()
+            optimiser.step()
+            wandb.log({
+                "train_loss": loss.item(),
+                # "train_acc": acc,
+                "epoch": epoch + 1,
+                "learning_rate": optimiser.param_groups[0]['lr'],
+            })
+            loop.set_postfix(loss=loss.item())#, accuracy=acc)
+        scheduler.step()
+
+class image_to_token_dataset(torch.utils.data.Dataset):
+    """Dataset that converts images to token sequences."""
+    def __init__(self, images, tokens):
+        self.images = images
+        self.tokens = tokens
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        return self.images[idx], self.tokens[idx]
+
+if __name__ == "__main__":
+    # If running as a script, call the train function
+    train()
+
+
+
+
 
 
 # TODO:
