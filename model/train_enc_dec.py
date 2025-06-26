@@ -14,6 +14,49 @@ from transformer import Transformer
 from torch.utils.data import random_split, DataLoader, TensorDataset
 
 
+# Wandb sweep configuration
+SWEEP_CONFIG = {
+    'method': 'bayes',  # or 'grid', 'random'
+    'metric': {
+        'name': 'train_loss',
+        'goal': 'minimize'
+    },
+    'parameters': {
+        'init_learning_rate': {
+            'distribution': 'log_uniform_values',
+            'min': 1e-5,
+            'max': 1e-4
+        },
+        'batch_size': {
+            'values': [256, 512, 1024]
+        },
+        'num_heads': {
+            'values': [12, 16, 20]
+        },
+        'num_encoders': {
+            'values': [6, 8, 10]
+        },
+        'num_decoders': {
+            'values': [6, 8, 10]
+        },
+        'dim_proj_V': {
+            'values': [16, 25, 32, 49, 64]
+        },
+        'dim_proj_QK': {
+            'values': [100, 128]
+        },
+        'mlp_hidden_dim': {
+            'values': [16, 64]
+        },
+        'dec_mask_num_heads': {
+            'values': [4, 8, 16]
+        },
+        'dec_cross_num_heads': {
+            'values': [8, 12, 16]
+        }
+    }
+}
+
 #TODO: add eval 
 TOKEN2IDX = {
   "0": 0,
@@ -165,9 +208,108 @@ class image_to_token_dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.images[idx], self.tokens[idx]
 
+def create_sweep_config_files():
+    """Create sweep configuration files for easy experimentation."""
+    import yaml
+    
+    # Bayes optimization sweep config
+    bayes_config = {
+        'method': 'bayes',
+        'metric': {
+            'name': 'train_loss',
+            'goal': 'minimize'
+        },
+        'parameters': {
+            'init_learning_rate': {
+                'distribution': 'log_uniform_values',
+                'min': 1e-5,
+                'max': 1e-2
+            },
+            'batch_size': {
+                'values': [256, 512, 1024, 2048]
+            },
+            'num_heads': {
+                'values': [4, 8, 16]
+            },
+            'num_encoders': {
+                'values': [4, 6, 8, 12]
+            },
+            'num_decoders': {
+                'values': [4, 6, 8, 12]
+            },
+            'dim_proj_V': {
+                'values': [16, 25, 32, 49, 64]
+            },
+            'dim_proj_QK': {
+                'values': [64, 100, 128, 256]
+            }
+        }
+    }
+    
+    # Random search sweep config
+    random_config = {
+        'method': 'random',
+        'metric': {
+            'name': 'train_loss',
+            'goal': 'minimize'
+        },
+        'parameters': {
+            'init_learning_rate': {
+                'distribution': 'log_uniform_values',
+                'min': 1e-5,
+                'max': 1e-2
+            },
+            'batch_size': {
+                'values': [256, 512, 1024, 2048]
+            },
+            'num_heads': {
+                'values': [4, 8, 16]
+            },
+            'num_encoders': {
+                'values': [4, 6, 8, 12]
+            },
+            'num_decoders': {
+                'values': [4, 6, 8, 12]
+            }
+        }
+    }
+    
+    # Write config files
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    
+    with open(os.path.join(project_root, "sweep_config.yaml"), 'w') as f:
+        yaml.dump(bayes_config, f, default_flow_style=False)
+    
+    with open(os.path.join(project_root, "sweep_config_random.yaml"), 'w') as f:
+        yaml.dump(random_config, f, default_flow_style=False)
+    
+    print("Created sweep configuration files:")
+    print("- sweep_config.yaml (Bayes optimization)")
+    print("- sweep_config_random.yaml (Random search)")
+
+def run_sweep():
+    """Run wandb sweep using the SWEEP_CONFIG defined in this script."""
+    sweep_id = wandb.sweep(
+        sweep=SWEEP_CONFIG,
+        project="mlx_wk3_mnist_transformer",
+        entity=os.environ.get("WANDB_ENTITY")
+    )
+    
+    print(f"Starting wandb sweep with ID: {sweep_id}")
+    print(f"View sweep at: https://wandb.ai/{os.environ.get('WANDB_ENTITY', 'your-entity')}/mlx_wk3_mnist_transformer/sweeps/{sweep_id}")
+    
+    # Run the sweep with 10 runs by default
+    wandb.agent(sweep_id, train, count=50)
+
 if __name__ == "__main__":
-    # If running as a script, call the train function
-    train()
+    import sys
+    
+    # Check if --sweep argument is passed
+    if "--sweep" in sys.argv:
+        run_sweep()
+    else:
+        # Run single training
+        train()
 
 
 
