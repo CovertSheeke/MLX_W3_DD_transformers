@@ -13,17 +13,17 @@ from encoder import TransformerEncoder
 from torch.utils.data import random_split, DataLoader, TensorDataset
 
 # Globals
-VAL_SIZE = 10000  # number of samples for validation
+VAL_SIZE = 10000  # Fixes the number sizes of samples for validation split
 
 def evaluate(
     model: nn.Module,
     dataloader: DataLoader,
     device: torch.device,
 ) -> tuple[float, float]:
-    """Run model on dataloader and return (avg_loss, avg_accuracy)."""
+    """evaluate:Run model on dataloader and return (avg_loss, avg_accuracy)."""
     model.eval()
     total_loss, total_acc, total_samples = 0.0, 0.0, 0
-    with torch.no_grad():
+    with torch.no_grad():# tells PyTorch “don’t keep track of gradients
         for imgs, targets in dataloader:
             imgs, targets = imgs.to(device), targets.to(device)
             img_embs = image_to_patch_columns(
@@ -73,11 +73,13 @@ def train() -> None:
             },
         )
 
-    # --- load and normalise data ---
+    # --- load and normalise MNIST data ---
     data_path = os.path.join(os.path.dirname(__file__), "..", "data", "mnist_trainset.pkl")
     with open(os.path.abspath(data_path), "rb") as f:
         fullset = pickle.load(f)
-    ds = fullset.data.float().div(255.0)
+    # x = raw_pixel/255.0 => brings values into [0,1]
+    # x = (x - 0.1307) / 0.3081 => centers around 0 with unit variance
+    ds = fullset.data.float().div(255.0)# Turns the original uint8 pixel values (0 up to 255) into floats between 0 and 1.
     ds = ds.sub_(0.1307).div_(0.3081)  # MNIST normalisation
     targets = fullset.targets
 
@@ -139,13 +141,13 @@ def train() -> None:
                     )
                 )
             # Continue into backprop
-            loss.backward()
-            optimiser.step()
+            loss.backward() # Compute gradients
+            optimiser.step() # Update parameters
             wandb.log({"train_loss": loss.item(), "train_acc": acc, "epoch": epoch})
-            if batch_idx % 100 == 0:
+            if batch_idx % 100 == 0: # Every 100 batches update the tqdm bar.
                 loop.set_postfix(loss=loss.item())
         
-        # end of epoch → validation
+        # end of epoch → Evaluate on the validation set
         val_loss, val_acc = evaluate(model, val_loader, dev)
         
         # Step the scheduler to update learning rate
@@ -169,7 +171,7 @@ def train() -> None:
 def run_sweep():
     """Run a wandb sweep to test different num_heads and num_encoders."""
     sweep_config = {
-        'method': 'grid',
+        'method': 'grid',# Grid sweep: tries every combination of num_heads x num_encoders
         'name': 'mnist_transformer_sweep',
         'metric': {
             'goal': 'maximize',
@@ -198,7 +200,7 @@ def run_sweep():
             'mlp_hidden_dim': {'value': 25},
         },
         'early_terminate': {
-            'type': 'hyperband',
+            'type': 'hyperband',# Stops bad run early.
             'min_iter': 5,
             'max_iter': 30,
             's': 2,
@@ -218,7 +220,7 @@ def run_sweep():
     print(f"wandb agent {os.environ.get('WANDB_ENTITY', 'your-entity')}/mlx_wk3_mnist_transformer/{sweep_id}")
     
     # Run the sweep agent
-    wandb.agent(sweep_id, train, count=12)  # 3x4 = 12 combinations for grid search
+    wandb.agent(sweep_id, train, count=12)  # Launches 3 head-options x 4 encoder-options = 12 combinations for grid search
 
 def main():
     """Main function to choose between single run or sweep."""
