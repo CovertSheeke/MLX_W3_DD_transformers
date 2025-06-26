@@ -1,3 +1,22 @@
+import torch
+import torch.nn.functional as F
+import torch.nn as nn
+import math
+import numpy as np
+import datetime
+import os
+import pickle
+import wandb
+import tqdm
+from patch_and_embed import image_to_patch_columns
+from encoder import TransformerEncoder
+from transformer import Transformer
+from torch.utils.data import random_split, DataLoader, TensorDataset
+
+
+#TODO: add eval 
+
+
 def train() -> None:
     """Training function that can be called by wandb agent or directly."""
     # --- setup seed, timestamp, device, W&B ---
@@ -40,3 +59,15 @@ def train() -> None:
 
             },
         )
+
+
+# TODO:
+# data loaders (images and tokens)
+# call model
+# set up optimiser
+# train loop: for epoch in epochs
+    # pass model data (images and tokens)
+    # calc loss and accuracy/other metrics
+    # optimiser
+    # backprop
+# save model here or during epochs

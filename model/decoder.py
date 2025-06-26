@@ -5,10 +5,7 @@ import torch.nn.functional as F
 
 import math
 
-#TODO: set config.:
-# num_decoders
-# max seq len
-# # maybe set seperate enc and dec dim
+
 TOKEN2IDX = {
   "0": 0,
   "1": 1,

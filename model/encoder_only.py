@@ -5,6 +5,43 @@ import math
 import numpy as np
 from patch_and_embed import image_to_patch_columns
 
+# Function to get 2D sinusoidal positional encodings
+#TODO: NO longer used, we used learned positional encodings instead. Could remove.
+def get_2d_sincos_pos_enc(grid_h: int, grid_w: int, d_model: int) -> torch.Tensor:
+    """
+    Return a [grid_h*grid_w, d_model] tensor of fixed 2D sinusoidal positional encodings.
+    Splits into row/column parts; handles odd d_model by uneven split.
+    So the first hald of the embedding gets the row position encoding added to the tensor, the 
+    second half gets the column position encoding added.
+    """
+    # how many dims for row vs col
+    half1 = d_model // 2                 # dims for the row signal
+    half2 = d_model - half1              # dims for the col signal
+
+    # Frequencies for rows and cols
+    div_r = 10000 ** (torch.arange(half1, dtype=torch.float32) / half1)
+    div_c = 10000 ** (torch.arange(half2, dtype=torch.float32) / half2)
+
+    # Row/col positions
+    pos_r = torch.arange(grid_h, dtype=torch.float32)[:, None]  # [H,1]
+    pos_c = torch.arange(grid_w, dtype=torch.float32)[:, None]  # [W,1]
+
+    # [H, half1] and [W, half2]
+    pe_r = torch.cat(
+        (torch.sin(pos_r / div_r[::2]), torch.cos(pos_r / div_r[1::2])), dim=1
+    )
+    pe_c = torch.cat(
+        (torch.sin(pos_c / div_c[::2]), torch.cos(pos_c / div_c[1::2])), dim=1
+    )
+
+    # Broadcast & interleave row/col encodings → [H, W, d_model]
+    pe = torch.zeros(grid_h, grid_w, d_model)
+    pe[:, :, :half1] = pe_r[:, None, :]
+    pe[:, :, half1:] = pe_c[None, :, :]
+
+    return pe.view(grid_h * grid_w, d_model)
+
+
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim):
         super(MLP, self).__init__()
@@ -83,8 +120,24 @@ class TransformerEncoder(torch.nn.Module):
             #assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
             x_n = self.mlp_between_blocks(x_n) # B, num_patches, dim_out
             #assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_out), f"Expected x_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {x_n.shape}"
-
-        return x_n
+        ## Old way, use avg pooling over the num_patches dimension
+        #pooled = x_n.mean(dim=1) # Average pooling over the num_patches dimension: B, dim_out
+        #assert pooled.shape[-1:] == torch.Size([self.config.dim_out]), f"Expected pooled shape ({self.config.batch_size}, {self.config.dim_out}), got {pooled.shape}"
+        # New way, use CLS token as pooled representation also add dropout and norm
+        cls_out = x_n[:, 0, :] 
+        # Add dropout and normalization
+        cls_out = self.final_norm(cls_out)
+        cls_out = self.final_dropout(cls_out)
+        # Use CLS token for classification. cls_head will reshape to (B, 10) for 10 classes.
+        predictions = self.cls_head(cls_out)  # Assuming self.mlp is defined in the class
+        assert predictions.shape[-1:] == torch.Size([10]), f"Expected predictions shape ({self.config.batch_size}, 10), got {predictions.shape}"
+        
+        pred_classes = predictions.argmax(dim=1)
+        correct = (pred_classes == trg).float().sum()
+        accuracy = correct / predictions.shape[0]
+        loss = F.cross_entropy(predictions, trg)
+        # Compute cross-entropy loss
+        return loss, accuracy
 
 class EncodingBlock(torch.nn.Module):
     def __init__(self, config):
