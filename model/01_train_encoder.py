@@ -73,6 +73,12 @@ def train() -> None:
             },
         )
 
+    # Tie Q/K & V dims to the swept d_model (allow overwrite)
+    wandb.config.update({
+        "dim_proj_QK": wandb.config.d_model,
+        "dim_proj_V":   wandb.config.d_model,
+    }, allow_val_change=True)
+
     # --- load and normalise data ---
     data_path = os.path.join(os.path.dirname(__file__), "..", "data", "mnist_trainset.pkl")
     with open(os.path.abspath(data_path), "rb") as f:
@@ -169,43 +175,35 @@ def train() -> None:
 def run_sweep():
     """Run a wandb sweep to test different num_heads and num_encoders."""
     sweep_config = {
-        'method': 'grid',
-        'name': 'mnist_transformer_sweep',
-        'metric': {
-            'goal': 'maximize',
-            'name': 'val_acc'
-        },
-        'parameters': {
-            'num_heads': {
-                'values': [4, 8, 16]
-            },
-            'num_encoders': {
-                'values': [4, 6, 8, 12]
-            },
-            # Fixed parameters
-            'init_learning_rate': {'value': 1e-4},
-            'min_learning_rate': {'value': 1e-6},
-            'batch_size': {'value': 1024},
-            'num_epochs': {'value': 30},  # Reduced for faster sweep
-            'num_patches': {'value': 16},
-            'patch_size': {'value': 7},
-            'stride': {'value': 7},
-            'dim_patch': {'value': 49},
-            'dim_proj_V': {'value': 25},
-            'dim_proj_QK': {'value': 100},
-            'dim_out': {'value': 49},
-            'dim_in': {'value': 49},
-            'mlp_hidden_dim': {'value': 25},
-        },
-        'early_terminate': {
-            'type': 'hyperband',
-            'min_iter': 5,
-            'max_iter': 30,
-            's': 2,
-            'eta': 3
-        }
+    "method": "grid",
+    "name": "mnist_transformer_sweep_v3",
+    "metric": {"goal": "maximize", "name": "val_acc"},
+    "parameters": {
+        "num_heads":       {"values": [4, 8, 16]},
+        "num_encoders":    {"values": [4, 8, 12]},
+        "d_model":         {"values": [64, 128]},       # new single dim
+        "mlp_hidden_dim":  {"values": [64, 128]},
+        "init_learning_rate": {"values": [1e-4, 1e-5]},
+        "batch_size":      {"values": [256, 512]},
+        # fixed
+        "min_learning_rate": {"value": 1e-6},
+        "num_epochs":        {"value": 100},
+        "num_patches":       {"value": 16},
+        "patch_size":        {"value": 7},
+        "stride":            {"value": 7},
+        "dim_patch":         {"value": 49},
+        "dim_out":           {"value": 49},
+        "dim_in":            {"value": 49}
+    },
+    "early_terminate": {
+        "type":     "hyperband",
+        "min_iter": 5,
+        "max_iter": 30,
+        "s":        2,
+        "eta":      3
     }
-    
+    }
+
     # Initialize the sweep
     sweep_id = wandb.sweep(
         sweep_config, 
@@ -218,7 +216,7 @@ def run_sweep():
     print(f"wandb agent {os.environ.get('WANDB_ENTITY', 'your-entity')}/mlx_wk3_mnist_transformer/{sweep_id}")
     
     # Run the sweep agent
-    wandb.agent(sweep_id, train, count=12)  # 3x4 = 12 combinations for grid search
+    wandb.agent(sweep_id, train)  # 3x4 = 12 combinations for grid search
 
 def main():
     """Main function to choose between single run or sweep."""
