@@ -14,7 +14,7 @@ from encoder import TransformerEncoder
 from transformer import Transformer
 from torch.utils.data import random_split, DataLoader, TensorDataset
 
-# Magic speed ups 
+# Magic speed ups that seem to be snake oil but do no harm
 # Enable cudnn autotuner for fixed-shape speedups
 torch.backends.cudnn.benchmark = True
 # Allow TF32 on Ampere+ GPUs for faster matmuls & convs
@@ -175,8 +175,12 @@ def train() -> None:
     ds = ds.sub_(0.1307).div_(0.3081)  # MNIST normalisation
     targets = fullset.targets
 
-    # train_ds = TensorDataset(ds, targets)
-    train_ds = Combine()
+    # Get train and val data
+    train_ds = Combine(train=True)
+    # Grab the 10k “official” test images
+    test_ds = Combine(train=False)
+
+    # Def data loaders
     train_loader = DataLoader(
         train_ds,
         batch_size=wandb.config.batch_size,
@@ -185,6 +189,13 @@ def train() -> None:
         train_ds,
         batch_size=wandb.config.batch_size,
         shuffle=False)
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=wandb.config.batch_size,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True,
+    )
     
     # model, optimiser, cross entropy loss, and scheduler
     model = Transformer(wandb.config).to(dev)  # Transformer model with encoder and decoder
@@ -203,6 +214,10 @@ def train() -> None:
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     CHECKPOINT_DIR = os.path.join(project_root, "checkpoints", f"enc_and_dec")
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    
+    # prep for saving best model
+    best_accuracy = 0.0
+    best_ckpt_path = ""
 
     # --- training loop ---
     for epoch in range(wandb.config.num_epochs):
@@ -273,6 +288,20 @@ def train() -> None:
             "epoch": epoch + 1,
         })
         print(f"Epoch {epoch +1}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}, lr={current_lr:.6f}")
+        # Save ckpt if better than previous best
+        if val_acc > best_accuracy:
+            print(f"New best accuracy, deleting old ckpt and saving new one)")
+            # delete the old best
+            if best_ckpt_path:
+                os.remove(best_ckpt_path)
+            # build new filename & save
+            best_ckpt_path = os.path.join(
+                CHECKPOINT_DIR,
+                f"best_encdec_epoch{epoch+1}_{ts}.pth"
+            )
+            best_accuracy = acc
+            torch.save(model.state_dict(), best_ckpt_path)
+
     # Save the model after the final epoch (in addition to best epoch)
     torch.save(
         model.state_dict(),
@@ -281,6 +310,7 @@ def train() -> None:
             f"enc_dec_final_epoch{ts}.pth"
         )
     )
+    # TODO: eval with the best epoch on the test data
     wandb.finish()
     print("Training complete.")
 
