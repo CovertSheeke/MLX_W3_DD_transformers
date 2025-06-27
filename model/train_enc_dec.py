@@ -14,48 +14,31 @@ from encoder import TransformerEncoder
 from transformer import Transformer
 from torch.utils.data import random_split, DataLoader, TensorDataset
 
+# Magic speed ups that seem to be snake oil but do no harm
+# Enable cudnn autotuner for fixed-shape speedups
+torch.backends.cudnn.benchmark = True
+# Allow TF32 on Ampere+ GPUs for faster matmuls & convs
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 
 # Wandb sweep configuration
 SWEEP_CONFIG = {
-    'method': 'bayes',  # or 'grid', 'random'
-    'metric': {
-        'name': 'train_loss',
-        'goal': 'minimize'
-    },
-    'parameters': {
-        'init_learning_rate': {
-            'distribution': 'log_uniform_values',
-            'min': 1e-5,
-            'max': 1e-4
-        },
-        'batch_size': {
-            'values': [256, 512, 1024]
-        },
-        'num_heads': {
-            'values': [12, 16, 20]
-        },
-        'num_encoders': {
-            'values': [6, 8, 10]
-        },
-        'num_decoders': {
-            'values': [6, 8, 10]
-        },
-        'dim_proj_V': {
-            'values': [16, 25, 32, 49, 64]
-        },
-        'dim_proj_QK': {
-            'values': [100, 128]
-        },
-        'mlp_hidden_dim': {
-            'values': [16, 64]
-        },
-        'dec_mask_num_heads': {
-            'values': [4, 8, 16]
-        },
-        'dec_cross_num_heads': {
-            'values': [8, 12, 16]
-        }
-    }
+  "method": "grid",
+  "metric": {"name": "train_loss", "goal": "minimize"},
+  "parameters": {
+    "init_learning_rate": {"values": [1e-5, 1e-4]},
+    "num_encoders":       {"values": [6, 10]},
+    "num_decoders":       {"values": [6, 10]},
+    # everything else fixed:
+    "batch_size":         {"value": 1024},
+    "num_heads":          {"value": 8},
+    "dim_proj_V":         {"value": 64},
+    "dim_proj_QK":        {"value": 128},
+    "mlp_hidden_dim":     {"value": 64},
+    "dec_mask_num_heads": {"value": 8},
+    "dec_cross_num_heads":{"value": 8},
+  }
 }
 
 #TODO: add eval 
@@ -75,6 +58,51 @@ TOKEN2IDX = {
   "<stop>": 12,
 }
 
+def evaluate(
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device,
+) -> tuple[float, float]:
+    model.eval()
+    cel = nn.CrossEntropyLoss()
+    val_loss, val_acc = 0.0, 0.0
+    with torch.no_grad():   
+        for images, patches, labels in dataloader:
+            imgs, pchs, lbls = images.to(device), patches, labels.to(device)
+            
+            # Handle the label concatenation properly
+            batch_size = lbls.size(0)
+            
+            # If lbls is 3D (batch_size, 1, seq_len), flatten it to (batch_size, seq_len)
+            if lbls.dim() == 3:
+                lbls = lbls.squeeze(1)
+            # Create start token for each batch item
+            start_token = torch.full((batch_size, 1), TOKEN2IDX["<start>"], device=device)
+            # Concatenate start token with labels along sequence dimension
+            lbls = torch.cat([start_token, lbls], dim=1)  # [1024, 1] + [1024, 4] -> [1024, 5]
+            img_embs = image_to_patch_columns(
+                imgs,
+                patch_size=wandb.config.patch_size,
+                stride=wandb.config.stride,
+            ).to(device)       
+            output = model(img_embs, lbls)
+            # Create target labels by shifting left and adding stop token
+            # labels[:, 1:] removes the start token from each sequence (keeping original lbls)
+            # Then we add the stop token at the end of each sequence
+            stop_token = torch.full((batch_size, 1), TOKEN2IDX["<stop>"], device=device)
+            targets = torch.cat([lbls[:, 1:], stop_token], dim=1)
+            # Adjust logits to match target sequence length
+            logits = output[:, :targets.size(1), :]  # Take only as many predictions as we have targets
+            logits = logits.reshape(-1, logits.size(-1))  # Reshape for loss calculation
+            targets = targets.reshape(-1)  # Reshape for loss calculation
+            # Calculate validation loss and accuracy
+            val_loss += cel(logits, targets).item()
+            val_acc += (logits.argmax(dim=-1) == targets).float().mean()
+    # Average over all batches
+    val_loss /= len(dataloader)
+    val_acc /= len(dataloader)
+    return val_loss, val_acc.item()
+            
 def train() -> None:
     """Training function that can be called by wandb agent or directly."""
     # --- setup seed, timestamp, device, W&B ---
@@ -126,12 +154,28 @@ def train() -> None:
     # train_ds = TensorDataset(ds, targets)
     full_ds = Combine(fullset)
     train_ds, val_ds = random_split(full_ds, [len(full_ds) - 10000, 10000])
+    #test_ds = Combine(train=False) #TODO
 
-    train_loader = DataLoader(train_ds, batch_size=wandb.config.batch_size, shuffle=True)
-    
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=wandb.config.batch_size,
+        shuffle=True,
+        num_workers=4,)
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=wandb.config.batch_size,
+        shuffle=False)
+    # test_loader = DataLoader(
+    #     test_ds,
+    #     batch_size=wandb.config.batch_size,
+    #     shuffle=False,
+    #     num_workers=4,
+    #     pin_memory=True,
+    # )
     
     # model, optimiser, cross entropy loss, and scheduler
-    model = Transformer(wandb.config).to(dev)
+    model = Transformer(wandb.config).to(dev)  # Transformer model with encoder and decoder
+
     optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.init_learning_rate)
     min_lr = wandb.config.min_learning_rate  # You can adjust this minimum learning rate as needed
     scheduler = torch.optim.lr_scheduler.LinearLR(
@@ -146,6 +190,10 @@ def train() -> None:
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     CHECKPOINT_DIR = os.path.join(project_root, "checkpoints", f"enc_and_dec")
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    
+    # prep for saving best model
+    best_accuracy = 0.0
+    best_ckpt_path = ""
 
     # --- training loop ---
     for epoch in range(wandb.config.num_epochs):
@@ -201,7 +249,35 @@ def train() -> None:
                 "learning_rate": optimiser.param_groups[0]['lr'],
             })
             loop.set_postfix(loss=loss.item())#, accuracy=acc)
+
+        # Step the scheduler to update learning rate
         scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+
+        # End of epoch validation
+        print(f"Validating after epoch {epoch +1}...")
+        val_loss, val_acc = evaluate(model, val_loader, dev)
+        wandb.log({
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "learning_rate": current_lr,
+            "epoch": epoch + 1,
+        })
+        print(f"Epoch {epoch +1}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}, lr={current_lr:.6f}")
+        # Save ckpt if better than previous best
+        if val_acc > best_accuracy:
+            print(f"New best accuracy, deleting old ckpt and saving new one)")
+            # delete the old best
+            if best_ckpt_path:
+                os.remove(best_ckpt_path)
+            # build new filename & save
+            best_ckpt_path = os.path.join(
+                CHECKPOINT_DIR,
+                f"best_encdec_epoch{epoch+1}_{ts}.pth"
+            )
+            best_accuracy = acc
+            torch.save(model.state_dict(), best_ckpt_path)
+
     # Save the model after the final epoch (in addition to best epoch)
     torch.save(
         model.state_dict(),
@@ -210,6 +286,9 @@ def train() -> None:
             f"enc_dec_final_epoch{ts}.pth"
         )
     )
+    # TODO: eval with the best epoch on the test data
+    wandb.finish()
+    print("Training complete.")
 
 class image_to_token_dataset(torch.utils.data.Dataset):
     """Dataset that converts images to token sequences."""

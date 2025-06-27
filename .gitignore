@@ -2,6 +2,7 @@
 data/
 scratch/
 checkpoints/
+MNIST/
 *.ckpt
 *.pt
 *.pth
