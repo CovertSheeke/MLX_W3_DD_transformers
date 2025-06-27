@@ -129,8 +129,6 @@ def train() -> None:
         batch_size=wandb.config.batch_size,
         shuffle=True)
     
-
-    
     # model, optimiser, cross entropy loss, and scheduler
     model = Transformer(wandb.config).to(dev)
     optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.init_learning_rate)
@@ -184,12 +182,13 @@ def train() -> None:
             # print("input labels (with start token):", lbls[0])
             # print("targets (shifted with stop token):", targets[0])
             loss = cel(logits, targets)  # Calculate cross-entropy loss
-            # acc = ### calculate accuracy here
+            # calculate accuracy 
+            acc = (logits.argmax(dim=-1) == targets).float().mean().item() 
             loss.backward()
             optimiser.step()
             wandb.log({
                 "train_loss": loss.item(),
-                # "train_acc": acc,
+                "train_acc": acc,
                 "epoch": epoch + 1,
                 "learning_rate": optimiser.param_groups[0]['lr'],
             })

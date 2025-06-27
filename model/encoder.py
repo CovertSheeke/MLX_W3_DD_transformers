@@ -84,8 +84,8 @@ class TransformerEncoder(torch.nn.Module):
             #assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
             x_n = self.mlp_between_blocks(x_n) # B, num_patches, dim_out
             #assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_out), f"Expected x_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {x_n.shape}"
-
         return x_n
+
 
 class EncodingBlock(torch.nn.Module):
     def __init__(self, config):
