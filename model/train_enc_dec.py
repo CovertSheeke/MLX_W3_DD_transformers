@@ -92,7 +92,7 @@ def train() -> None:
                 "init_learning_rate": 1e-4,
                 "min_learning_rate": 1e-6,
                 "batch_size": 1024,
-                "num_epochs": 100,
+                "num_epochs": 10,
                 "num_heads": 8,
                 "num_encoders": 8,
                 "num_patches": 16,
@@ -195,6 +195,14 @@ def train() -> None:
             })
             loop.set_postfix(loss=loss.item())#, accuracy=acc)
         scheduler.step()
+    # Save the model after the final epoch (in addition to best epoch)
+    torch.save(
+        model.state_dict(),
+        os.path.join(
+            CHECKPOINT_DIR,
+            f"enc_dec_final_epoch{ts}.pth"
+        )
+    )
 
 class image_to_token_dataset(torch.utils.data.Dataset):
     """Dataset that converts images to token sequences."""

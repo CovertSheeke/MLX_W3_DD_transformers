@@ -71,7 +71,7 @@ class TransformerDecoder(nn.Module):
 
         # 2. Pass through the decoder blocks
         for decoding_block in self.decoding_blocks:
-            x_n = decoding_block(x_n, enc_out)  
+            x_n = decoding_block(x_n, enc_out) # is going to give us a FFN'd and normalised output
  
         # Project final output from decoder blocks to logits
         return self.to_logits(x_n)  # (B, T, vocab_size)

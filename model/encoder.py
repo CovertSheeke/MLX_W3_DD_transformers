@@ -73,6 +73,7 @@ class TransformerEncoder(torch.nn.Module):
         x_n = self.patch_proj(x_n)                                # → (B, P, dim_in)
         # prepended CLS
         cls = self.cls_token.expand(bsz, -1, -1)              # → (B, 1, dim_in)
+        #TODO: could take out cls token from encoder now?
         x_n = torch.cat((cls, x_n), dim=1)                        # → (B, P+1, dim_in)
         # add pos encoding
         x_n = x_n + self.pos_encoding[:, : x_n.size(1), :]          # still (B, P+1, dim_in)

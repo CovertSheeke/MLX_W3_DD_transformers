@@ -35,5 +35,6 @@ class Transformer(nn.Module):
         """
 
         enc_out = self.encoder(imgs)
+        # decoder will output logits after linear transformation of dec_dim_in down to len vocab size
         logits = self.decoder(tokens, enc_out)
         return logits
