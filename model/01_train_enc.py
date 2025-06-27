@@ -9,7 +9,7 @@ import pickle
 import wandb
 import tqdm
 from patch_and_embed import image_to_patch_columns
-from encoder import TransformerEncoder
+from encoder_only import TransformerEncoder
 from torch.utils.data import random_split, DataLoader, TensorDataset
 
 # Globals
@@ -151,13 +151,12 @@ def train() -> None:
             if batch_idx % 100 == 0:
                 loop.set_postfix(loss=loss.item())
         
-        # end of epoch → validation
-        val_loss, val_acc = evaluate(model, val_loader, dev)
-        
         # Step the scheduler to update learning rate
         scheduler.step()
         current_lr = scheduler.get_last_lr()[0]
         
+        # end of epoch → validation
+        val_loss, val_acc = evaluate(model, val_loader, dev)
         wandb.log({"val_loss": val_loss, "val_acc": val_acc, "learning_rate": current_lr, "epoch": epoch})
         print(f"Epoch {epoch}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}, lr={current_lr:.6f}")
     # Save the model

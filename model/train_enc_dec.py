@@ -14,6 +14,13 @@ from encoder import TransformerEncoder
 from transformer import Transformer
 from torch.utils.data import random_split, DataLoader, TensorDataset
 
+# Magic speed ups 
+# Enable cudnn autotuner for fixed-shape speedups
+torch.backends.cudnn.benchmark = True
+# Allow TF32 on Ampere+ GPUs for faster matmuls & convs
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 
 # Wandb sweep configuration
 SWEEP_CONFIG = {
@@ -75,6 +82,51 @@ TOKEN2IDX = {
   "<stop>": 12,
 }
 
+def evaluate(
+    model: nn.Module,
+    dataloader: DataLoader,
+    device: torch.device,
+) -> tuple[float, float]:
+    model.eval()
+    cel = nn.CrossEntropyLoss()
+    val_loss, val_acc = 0.0, 0.0
+    with torch.no_grad():   
+        for images, patches, labels in dataloader:
+            imgs, pchs, lbls = images.to(device), patches, labels.to(device)
+            
+            # Handle the label concatenation properly
+            batch_size = lbls.size(0)
+            
+            # If lbls is 3D (batch_size, 1, seq_len), flatten it to (batch_size, seq_len)
+            if lbls.dim() == 3:
+                lbls = lbls.squeeze(1)
+            # Create start token for each batch item
+            start_token = torch.full((batch_size, 1), TOKEN2IDX["<start>"], device=device)
+            # Concatenate start token with labels along sequence dimension
+            lbls = torch.cat([start_token, lbls], dim=1)  # [1024, 1] + [1024, 4] -> [1024, 5]
+            img_embs = image_to_patch_columns(
+                imgs,
+                patch_size=wandb.config.patch_size,
+                stride=wandb.config.stride,
+            ).to(device)       
+            output = model(img_embs, lbls)
+            # Create target labels by shifting left and adding stop token
+            # labels[:, 1:] removes the start token from each sequence (keeping original lbls)
+            # Then we add the stop token at the end of each sequence
+            stop_token = torch.full((batch_size, 1), TOKEN2IDX["<stop>"], device=device)
+            targets = torch.cat([lbls[:, 1:], stop_token], dim=1)
+            # Adjust logits to match target sequence length
+            logits = output[:, :targets.size(1), :]  # Take only as many predictions as we have targets
+            logits = logits.reshape(-1, logits.size(-1))  # Reshape for loss calculation
+            targets = targets.reshape(-1)  # Reshape for loss calculation
+            # Calculate validation loss and accuracy
+            val_loss += cel(logits, targets).item()
+            val_acc += (logits.argmax(dim=-1) == targets).float().mean()
+    # Average over all batches
+    val_loss /= len(dataloader)
+    val_acc /= len(dataloader)
+    return val_loss, val_acc.item()
+            
 def train() -> None:
     """Training function that can be called by wandb agent or directly."""
     # --- setup seed, timestamp, device, W&B ---
@@ -125,14 +177,18 @@ def train() -> None:
 
     # train_ds = TensorDataset(ds, targets)
     train_ds = Combine()
-
     train_loader = DataLoader(
         train_ds,
         batch_size=wandb.config.batch_size,
         shuffle=True)
+    val_loader = DataLoader(
+        train_ds,
+        batch_size=wandb.config.batch_size,
+        shuffle=False)
     
     # model, optimiser, cross entropy loss, and scheduler
-    model = Transformer(wandb.config).to(dev)
+    model = Transformer(wandb.config).to(dev)  # Transformer model with encoder and decoder
+
     optimiser = torch.optim.Adam(model.parameters(), lr=wandb.config.init_learning_rate)
     min_lr = wandb.config.min_learning_rate  # You can adjust this minimum learning rate as needed
     scheduler = torch.optim.lr_scheduler.LinearLR(
@@ -202,7 +258,21 @@ def train() -> None:
                 "learning_rate": optimiser.param_groups[0]['lr'],
             })
             loop.set_postfix(loss=loss.item())#, accuracy=acc)
+
+        # Step the scheduler to update learning rate
         scheduler.step()
+        current_lr = scheduler.get_last_lr()[0]
+
+        # End of epoch validation
+        print(f"Validating after epoch {epoch +1}...")
+        val_loss, val_acc = evaluate(model, val_loader, dev)
+        wandb.log({
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+            "learning_rate": current_lr,
+            "epoch": epoch + 1,
+        })
+        print(f"Epoch {epoch +1}: val_loss={val_loss:.4f}, val_acc={val_acc:.4f}, lr={current_lr:.6f}")
     # Save the model after the final epoch (in addition to best epoch)
     torch.save(
         model.state_dict(),
@@ -211,6 +281,8 @@ def train() -> None:
             f"enc_dec_final_epoch{ts}.pth"
         )
     )
+    wandb.finish()
+    print("Training complete.")
 
 class image_to_token_dataset(torch.utils.data.Dataset):
     """Dataset that converts images to token sequences."""
