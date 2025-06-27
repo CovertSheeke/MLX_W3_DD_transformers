@@ -124,12 +124,11 @@ def train() -> None:
     targets = fullset.targets
 
     # train_ds = TensorDataset(ds, targets)
-    train_ds = Combine()
+    full_ds = Combine(fullset)
+    train_ds, val_ds = random_split(full_ds, [len(full_ds) - 10000, 10000])
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=wandb.config.batch_size,
-        shuffle=True)
+    train_loader = DataLoader(train_ds, batch_size=wandb.config.batch_size, shuffle=True)
+    
     
     # model, optimiser, cross entropy loss, and scheduler
     model = Transformer(wandb.config).to(dev)

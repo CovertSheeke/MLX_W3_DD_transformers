@@ -6,6 +6,7 @@ import torchvision as tv
 import matplotlib.pyplot as plt
 import random
 import einops
+import numpy as np
 
 
 #
@@ -19,28 +20,54 @@ random.seed(47)
 #
 #
 class Combine(torch.utils.data.Dataset):
-  def __init__(self, train=True):
+  def __init__(self, fullset=None, train=True):
     super().__init__()
-    self.tf = tv.transforms.Compose([tv.transforms.ToTensor(), tv.transforms.Normalize((0.1307,), (0.3081,))])
-    self.tk = { '0': 0, '1': 1, '2': 2, '3': 3, '4': 4, '5': 5, '6': 6, '7': 7, '8': 8, '9': 9}
-    self.ds = tv.datasets.MNIST(root='.', train=train, download=True)
-    # self.ds = self.ds.data.float().div(255.0) ## normalisation
-    # self.ds = self.ds.sub_(0.1307).div_(0.3081) ## normalisation
+    self.tf = tv.transforms.Compose([
+      tv.transforms.ToTensor(),
+      tv.transforms.Normalize((0.1307,), (0.3081,))
+    ])
+    self.tk = {str(i): i for i in range(10)}
+    if fullset is not None:
+      self.ds = fullset
+      self.data = fullset.data
+      self.targets = fullset.targets
     self.ti = tv.transforms.ToPILImage()
-    self.ln = len(self.ds)
+    self.ln = len(self.data)
 
   def __len__(self):
-    return len(self.ds)
+    return self.ln
 
   def __getitem__(self, idx):
-    idx = random.sample(range(self.ln), 4)
-    store = [self.ds[i][0] for i in idx]
-    label = [self.ds[i][1] for i in idx]
-    tnsrs = [self.tf(img) for img in store]
+    idxs = random.sample(range(self.ln), 4)
+    imgs = [self.data[i] for i in idxs]
+    labels = [self.targets[i].item() for i in idxs]
+    tnsrs = [self.tf(self.ti(img)) for img in imgs]
     stack = torch.stack(tnsrs, dim=0).squeeze()
     combo = einops.rearrange(stack, '(h w) ph pw -> (h ph) (w pw)', h=2, w=2, ph=28, pw=28)
     patch = einops.rearrange(combo, '(h ph) (w pw) -> (h w) ph pw', ph=14, pw=14)
-    return combo, patch, torch.tensor(label)
+    return combo, patch, torch.tensor(labels)
+  
+# class MultiIndexBatchLoader(torch.utils.data.IterableDataset):
+#     def __init__(self, dataset, batch_size=8):
+#         super().__init__()
+#         self.dataset = dataset
+#         self.batch_size = batch_size
+#         self.length = len(dataset) // batch_size
+
+#     def __len__(self):
+#         return self.length
+
+#     def __iter__(self):
+#         indices = np.arange(len(self.dataset))
+#         np.random.shuffle(indices)
+#         for i in range(0, len(indices) - 4 * self.batch_size + 1, 4 * self.batch_size):
+#             batch = []
+#             for j in range(self.batch_size):
+#                 idxs = indices[i + 4*j : i + 4*(j+1)]
+#                 if len(idxs) == 4:
+#                     batch.append(self.dataset[list(idxs)])
+#             if len(batch) == self.batch_size:
+#                 yield batch
 
 
 #
