@@ -24,45 +24,21 @@ torch.backends.cudnn.allow_tf32 = True
 
 # Wandb sweep configuration
 SWEEP_CONFIG = {
-    'method': 'bayes',  # or 'grid', 'random'
-    'metric': {
-        'name': 'train_loss',
-        'goal': 'minimize'
-    },
-    'parameters': {
-        'init_learning_rate': {
-            'distribution': 'log_uniform_values',
-            'min': 1e-5,
-            'max': 1e-4
-        },
-        'batch_size': {
-            'values': [256, 512, 1024]
-        },
-        'num_heads': {
-            'values': [12, 16, 20]
-        },
-        'num_encoders': {
-            'values': [6, 8, 10]
-        },
-        'num_decoders': {
-            'values': [6, 8, 10]
-        },
-        'dim_proj_V': {
-            'values': [16, 25, 32, 49, 64]
-        },
-        'dim_proj_QK': {
-            'values': [100, 128]
-        },
-        'mlp_hidden_dim': {
-            'values': [16, 64]
-        },
-        'dec_mask_num_heads': {
-            'values': [4, 8, 16]
-        },
-        'dec_cross_num_heads': {
-            'values': [8, 12, 16]
-        }
-    }
+  "method": "grid",
+  "metric": {"name": "train_loss", "goal": "minimize"},
+  "parameters": {
+    "init_learning_rate": {"values": [1e-5, 1e-4]},
+    "num_encoders":       {"values": [6, 10]},
+    "num_decoders":       {"values": [6, 10]},
+    # everything else fixed:
+    "batch_size":         {"value": 1024},
+    "num_heads":          {"value": 8},
+    "dim_proj_V":         {"value": 64},
+    "dim_proj_QK":        {"value": 128},
+    "mlp_hidden_dim":     {"value": 64},
+    "dec_mask_num_heads": {"value": 8},
+    "dec_cross_num_heads":{"value": 8},
+  }
 }
 
 #TODO: add eval 
@@ -178,7 +154,7 @@ def train() -> None:
     # train_ds = TensorDataset(ds, targets)
     full_ds = Combine(fullset)
     train_ds, val_ds = random_split(full_ds, [len(full_ds) - 10000, 10000])
-    test_ds = Combine(train=False)
+    #test_ds = Combine(train=False) #TODO
 
     train_loader = DataLoader(
         train_ds,
@@ -189,13 +165,13 @@ def train() -> None:
         val_ds,
         batch_size=wandb.config.batch_size,
         shuffle=False)
-    test_loader = DataLoader(
-        test_ds,
-        batch_size=wandb.config.batch_size,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True,
-    )
+    # test_loader = DataLoader(
+    #     test_ds,
+    #     batch_size=wandb.config.batch_size,
+    #     shuffle=False,
+    #     num_workers=4,
+    #     pin_memory=True,
+    # )
     
     # model, optimiser, cross entropy loss, and scheduler
     model = Transformer(wandb.config).to(dev)  # Transformer model with encoder and decoder
