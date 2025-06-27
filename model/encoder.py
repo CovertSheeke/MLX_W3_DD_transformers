@@ -73,6 +73,7 @@ class TransformerEncoder(torch.nn.Module):
         x_n = self.patch_proj(x_n)                                # → (B, P, dim_in)
         # prepended CLS
         cls = self.cls_token.expand(bsz, -1, -1)              # → (B, 1, dim_in)
+        #TODO: could take out cls token from encoder now?
         x_n = torch.cat((cls, x_n), dim=1)                        # → (B, P+1, dim_in)
         # add pos encoding
         x_n = x_n + self.pos_encoding[:, : x_n.size(1), :]          # still (B, P+1, dim_in)
@@ -83,8 +84,8 @@ class TransformerEncoder(torch.nn.Module):
             #assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_proj_V), f"Expected x_n shape ({self.config.batch_size}, {self.config.num_patches}, {self.config.dim_proj_V}), got {x_n.shape}"
             x_n = self.mlp_between_blocks(x_n) # B, num_patches, dim_out
             #assert x_n.shape[-2:] == (self.config.num_patches +1, self.config.dim_out), f"Expected x_n shape ({self.batch_size}, {self.config.num_patches}, {self.config.dim_out}), got {x_n.shape}"
-
         return x_n
+
 
 class EncodingBlock(torch.nn.Module):
     def __init__(self, config):

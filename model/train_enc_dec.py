@@ -93,7 +93,7 @@ def train() -> None:
                 "init_learning_rate": 1e-4,
                 "min_learning_rate": 1e-6,
                 "batch_size": 1024,
-                "num_epochs": 100,
+                "num_epochs": 10,
                 "num_heads": 8,
                 "num_encoders": 8,
                 "num_patches": 16,
@@ -130,8 +130,6 @@ def train() -> None:
         train_ds,
         batch_size=wandb.config.batch_size,
         shuffle=True)
-    
-
     
     # model, optimiser, cross entropy loss, and scheduler
     model = Transformer(wandb.config).to(dev)
@@ -193,17 +191,26 @@ def train() -> None:
             # print("input labels (with start token):", lbls[0])
             # print("targets (shifted with stop token):", targets[0])
             loss = cel(logits, targets)  # Calculate cross-entropy loss
-            # acc = ### calculate accuracy here
+            # calculate accuracy 
+            acc = (logits.argmax(dim=-1) == targets).float().mean().item() 
             loss.backward()
             optimiser.step()
             wandb.log({
                 "train_loss": loss.item(),
-                # "train_acc": acc,
+                "train_acc": acc,
                 "epoch": epoch + 1,
                 "learning_rate": optimiser.param_groups[0]['lr'],
             })
             loop.set_postfix(loss=loss.item())#, accuracy=acc)
         scheduler.step()
+    # Save the model after the final epoch (in addition to best epoch)
+    torch.save(
+        model.state_dict(),
+        os.path.join(
+            CHECKPOINT_DIR,
+            f"enc_dec_final_epoch{ts}.pth"
+        )
+    )
 
 class image_to_token_dataset(torch.utils.data.Dataset):
     """Dataset that converts images to token sequences."""
