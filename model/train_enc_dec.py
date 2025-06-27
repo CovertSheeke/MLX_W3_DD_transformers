@@ -175,18 +175,18 @@ def train() -> None:
     ds = ds.sub_(0.1307).div_(0.3081)  # MNIST normalisation
     targets = fullset.targets
 
-    # Get train and val data
-    train_ds = Combine(train=True)
-    # Grab the 10k “official” test images
+    # train_ds = TensorDataset(ds, targets)
+    full_ds = Combine(fullset)
+    train_ds, val_ds = random_split(full_ds, [len(full_ds) - 10000, 10000])
     test_ds = Combine(train=False)
 
-    # Def data loaders
     train_loader = DataLoader(
         train_ds,
         batch_size=wandb.config.batch_size,
-        shuffle=True)
+        shuffle=True,
+        num_workers=4,)
     val_loader = DataLoader(
-        train_ds,
+        val_ds,
         batch_size=wandb.config.batch_size,
         shuffle=False)
     test_loader = DataLoader(
