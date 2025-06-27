@@ -8,6 +8,7 @@ import os
 import pickle
 import wandb
 import tqdm
+from image_grid_dataset import Combine
 from patch_and_embed import image_to_patch_columns
 from encoder import TransformerEncoder
 from transformer import Transformer
@@ -96,16 +97,16 @@ def train() -> None:
                 "num_heads": 8,
                 "num_encoders": 8,
                 "num_patches": 16,
-                "patch_size": 7,
-                "stride": 7,
-                "dim_patch": 49,
+                "patch_size": 14,
+                "stride": 14,
+                "dim_patch": 196,
                 "dim_proj_V": 25,
                 "dim_proj_QK": 100,
                 "dim_out": 49,
                 "dim_in": 49,
                 "mlp_hidden_dim": 25,
                 # decoder stuff below
-                "max_seq_len": 10,  # Maximum sequence length for decoder input
+                "max_seq_len": 5,  # Maximum sequence length for decoder input
                 "dec_dim_in": 49,
                 "dec_dim_out":49,
                 "num_decoders": 6,
@@ -122,7 +123,8 @@ def train() -> None:
     ds = ds.sub_(0.1307).div_(0.3081)  # MNIST normalisation
     targets = fullset.targets
 
-    train_ds = TensorDataset(ds, targets)
+    # train_ds = TensorDataset(ds, targets)
+    train_ds = Combine()
 
     train_loader = DataLoader(
         train_ds,
@@ -150,15 +152,22 @@ def train() -> None:
     for epoch in range(wandb.config.num_epochs):
         model.train()
         loop = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{wandb.config.num_epochs},", leave=False)
-        for images, labels in loop:
-            imgs, lbls = images.to(dev), labels.to(dev)
-            start_token = torch.full((lbls.size(0), 1), TOKEN2IDX["<start>"], device=dev)
-            # print('start token', start_token.shape)
-            # print('lbls', lbls.shape)
-            # Add dimension to lbls to make it [batch_size, 1] for concatenation
-            lbls_expanded = lbls.unsqueeze(1)  # Convert from [1024] to [1024, 1]
-            lbls = torch.cat([start_token, lbls_expanded], dim=1)  # Add start token to labels
-            # print('labels', labels)
+        for images, patches, labels in loop:
+            imgs, pchs, lbls = images.to(dev), patches, labels.to(dev)
+            
+            # Handle the label concatenation properly
+            batch_size = lbls.size(0)
+            
+            # If lbls is 3D (batch_size, 1, seq_len), flatten it to (batch_size, seq_len)
+            if lbls.dim() == 3:
+                lbls = lbls.squeeze(1)  # Remove the middle dimension: [1024, 1, 4] -> [1024, 4]
+            
+            # Create start token for each batch item
+            start_token = torch.full((batch_size, 1), TOKEN2IDX["<start>"], device=dev)
+            
+            # Concatenate start token with labels along sequence dimension
+            lbls = torch.cat([start_token, lbls], dim=1)  # [1024, 1] + [1024, 4] -> [1024, 5]
+            
             img_embs = image_to_patch_columns(
                 imgs,
                 patch_size=wandb.config.patch_size,

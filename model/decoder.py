@@ -65,7 +65,8 @@ class TransformerDecoder(nn.Module):
         T = tokens.shape  # B: batch size, T: token sequence length
         # 1. Embed tokens and add positional embeddings
         # print('tokens', tokens.shape)  # (B, T)
-        position_ids = torch.arange(2, device=tokens.device)
+        position_ids = torch.arange(self.config.max_seq_len, device=tokens.device)
+
         pos = self.pos_emb(position_ids).unsqueeze(0)   # → (1, T, D)
         x_n = self.token_emb(tokens) + pos              # broadcasts to (B, T, D)
 
