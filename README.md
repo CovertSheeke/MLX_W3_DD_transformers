@@ -8,7 +8,7 @@ apt install uv  (brew install uv [for mac])
 
 then use 
 
-uv sync
+uv syn
 
 to bring your current uv venv into alignment with the uv.lock and pyproject.toml files
 
